@@ -1,0 +1,240 @@
+package com.example.smarttag.ui.screen
+
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BluetoothSearching
+import androidx.compose.material.icons.filled.Campaign
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.smarttag.model.SmartTag
+import com.example.smarttag.model.TagStatus
+import com.example.smarttag.viewmodel.ScanViewModel
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ScanScreen(
+    viewModel: ScanViewModel,
+    onTagClick: (String) -> Unit,
+    onBroadcastClick: () -> Unit = {}
+) {
+    val isScanning by viewModel.isScanning.collectAsState()
+    val tags by viewModel.mergedTags.collectAsState()
+    val snackbar by viewModel.snackbarMessage.collectAsState()
+
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(snackbar) {
+        snackbar?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.clearSnackbar()
+        }
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("SmartTag BLE", fontWeight = FontWeight.Bold) },
+                actions = {
+                    IconButton(onClick = onBroadcastClick) {
+                        Icon(Icons.Default.Campaign, contentDescription = "그룹 브로드캐스트")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                )
+            )
+        },
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = { viewModel.toggleScan() },
+                containerColor = if (isScanning) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.primary
+            ) {
+                Icon(
+                    imageVector = if (isScanning) Icons.Default.Stop else Icons.Default.BluetoothSearching,
+                    contentDescription = if (isScanning) "스캔 중지" else "스캔 시작"
+                )
+            }
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+        ) {
+            // 상태 바
+            ScanStatusBar(isScanning = isScanning, tagCount = tags.size)
+
+            if (tags.isEmpty()) {
+                EmptyState(isScanning = isScanning)
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(tags, key = { it.deviceAddress }) { tag ->
+                        TagItem(
+                            tag = tag,
+                            onClick = { onTagClick(tag.deviceAddress) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScanStatusBar(isScanning: Boolean, tagCount: Int) {
+    val bgColor by animateColorAsState(
+        targetValue = if (isScanning) MaterialTheme.colorScheme.primaryContainer
+        else MaterialTheme.colorScheme.surfaceVariant,
+        label = "scanBarColor"
+    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(bgColor)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (isScanning) {
+                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+            }
+            Text(
+                text = if (isScanning) "스캔 중..." else "스캔 대기",
+                style = MaterialTheme.typography.labelLarge
+            )
+        }
+        Text(
+            text = "발견된 태그: ${tagCount}개",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun EmptyState(isScanning: Boolean) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Icon(
+                imageVector = Icons.Default.BluetoothSearching,
+                contentDescription = null,
+                modifier = Modifier.size(64.dp),
+                tint = MaterialTheme.colorScheme.outline
+            )
+            Text(
+                text = if (isScanning) "SmartTag 검색 중..." else "우측 하단 버튼으로 스캔을 시작하세요",
+                color = MaterialTheme.colorScheme.outline
+            )
+        }
+    }
+}
+
+@Composable
+private fun TagItem(tag: SmartTag, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // RSSI 인디케이터
+            RssiIndicator(rssi = tag.rssi)
+
+            // 태그 정보
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = tag.deviceName,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = "ID: ${tag.tagId}  •  ${tag.deviceAddress}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (tag.targetPrice > 0) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "목표가: ${"%,d".format(tag.targetPrice)}원",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.secondary
+                    )
+                }
+            }
+
+            // 상태 배지
+            StatusBadge(status = tag.status)
+        }
+    }
+}
+
+@Composable
+private fun RssiIndicator(rssi: Int) {
+    val color = when {
+        rssi >= -60 -> Color(0xFF4CAF50)
+        rssi >= -75 -> Color(0xFFFF9800)
+        else -> Color(0xFFF44336)
+    }
+    Box(
+        modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(color.copy(alpha = 0.15f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = rssi.toString(),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = color
+            )
+            Text(text = "dBm", fontSize = 8.sp, color = color)
+        }
+    }
+}
+
+@Composable
+private fun StatusBadge(status: TagStatus) {
+    val (text, color) = when (status) {
+        TagStatus.UPDATED -> "완료" to Color(0xFF4CAF50)
+        TagStatus.PENDING -> "대기" to Color(0xFFFF9800)
+        TagStatus.FAILED  -> "실패" to Color(0xFFF44336)
+    }
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(color.copy(alpha = 0.15f))
+            .padding(horizontal = 10.dp, vertical = 4.dp)
+    ) {
+        Text(text = text, color = color, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+    }
+}
