@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BluetoothSearching
 import androidx.compose.material.icons.filled.Campaign
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -23,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.smarttag.model.SmartTag
 import com.example.smarttag.model.TagStatus
+import com.example.smarttag.viewmodel.BroadcastQueueState
 import com.example.smarttag.viewmodel.ScanViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -35,6 +37,8 @@ fun ScanScreen(
     val isScanning by viewModel.isScanning.collectAsState()
     val tags by viewModel.mergedTags.collectAsState()
     val snackbar by viewModel.snackbarMessage.collectAsState()
+    val currentGroupId by viewModel.currentGroupId.collectAsState()
+    val queueState by viewModel.broadcastQueueState.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -80,6 +84,17 @@ fun ScanScreen(
         ) {
             // 상태 바
             ScanStatusBar(isScanning = isScanning, tagCount = tags.size)
+
+            // 앵커 감지 배너
+            currentGroupId?.let { gid ->
+                AnchorBanner(groupId = gid)
+            }
+
+            // 브로드캐스트 큐 진행 배너
+            if (queueState is BroadcastQueueState.Running) {
+                val running = queueState as BroadcastQueueState.Running
+                QueueProgressBanner(groupId = running.groupId, pendingCount = running.pendingCount)
+            }
 
             if (tags.isEmpty()) {
                 EmptyState(isScanning = isScanning)
@@ -134,6 +149,53 @@ private fun ScanStatusBar(isScanning: Boolean, tagCount: Int) {
 }
 
 @Composable
+private fun AnchorBanner(groupId: Int) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.secondaryContainer)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Icon(
+            Icons.Default.LocationOn,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+            tint = MaterialTheme.colorScheme.onSecondaryContainer
+        )
+        Text(
+            "현재 구역: Group $groupId",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSecondaryContainer
+        )
+    }
+}
+
+@Composable
+private fun QueueProgressBanner(groupId: Int, pendingCount: Int) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.tertiaryContainer)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(14.dp),
+            strokeWidth = 2.dp,
+            color = MaterialTheme.colorScheme.onTertiaryContainer
+        )
+        Text(
+            "Group $groupId 업데이트 중… 잔여 ${pendingCount}개",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onTertiaryContainer
+        )
+    }
+}
+
+@Composable
 private fun EmptyState(isScanning: Boolean) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -170,23 +232,47 @@ private fun TagItem(tag: SmartTag, onClick: () -> Unit) {
 
             // 태그 정보
             Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = tag.productName.ifBlank { tag.deviceName },
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    if (tag.groupId > 0) {
+                        Text(
+                            text = "G${tag.groupId}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = androidx.compose.ui.Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(MaterialTheme.colorScheme.primaryContainer)
+                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                        )
+                    }
+                }
                 Text(
-                    text = tag.deviceName,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    text = "ID: ${tag.tagId}  •  ${tag.deviceAddress}",
+                    text = "TAG-${"%03d".format(tag.tagId)}  •  ${tag.deviceAddress}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                if (tag.targetPrice > 0) {
+                if (tag.currentPrice > 0 || tag.targetPrice > 0) {
                     Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = "목표가: ${"%,d".format(tag.targetPrice)}원",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.secondary
-                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (tag.currentPrice > 0) {
+                            Text(
+                                text = "현재 ${"%,d".format(tag.currentPrice)}원",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (tag.targetPrice > 0 && tag.targetPrice != tag.currentPrice) {
+                            Text(
+                                text = "→ ${"%,d".format(tag.targetPrice)}원",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.secondary
+                            )
+                        }
+                    }
                 }
             }
 

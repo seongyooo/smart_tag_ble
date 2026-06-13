@@ -6,9 +6,11 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverter
 import androidx.room.TypeConverters
+import com.example.smarttag.model.EventType
 import com.example.smarttag.model.TagStatus
+import java.time.LocalDate
 
-@Database(entities = [SmartTagEntity::class], version = 1, exportSchema = false)
+@Database(entities = [SmartTagEntity::class], version = 2, exportSchema = false)
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun smartTagDao(): SmartTagDao
@@ -22,15 +24,36 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "smarttag.db"
-                ).build().also { INSTANCE = it }
+                )
+                .fallbackToDestructiveMigration(dropAllTables = true)
+                .build()
+                .also { INSTANCE = it }
             }
     }
 }
 
 class Converters {
+
+    // TagStatus
+    @TypeConverter fun fromTagStatus(v: TagStatus): String = v.name
+    @TypeConverter fun toTagStatus(v: String): TagStatus = TagStatus.valueOf(v)
+
+    // EventType
+    @TypeConverter fun fromEventType(v: EventType): Int = v.code
+    @TypeConverter fun toEventType(v: Int): EventType = EventType.fromCode(v)
+
+    // LocalDate? → "MM-dd" 문자열 (연도 불필요, 월/일만 사용)
     @TypeConverter
-    fun fromTagStatus(value: TagStatus): String = value.name
+    fun fromLocalDate(date: LocalDate?): String? =
+        date?.let { "%02d-%02d".format(it.monthValue, it.dayOfMonth) }
 
     @TypeConverter
-    fun toTagStatus(value: String): TagStatus = TagStatus.valueOf(value)
+    fun toLocalDate(value: String?): LocalDate? {
+        if (value == null) return null
+        val parts = value.split("-")
+        if (parts.size != 2) return null
+        return runCatching {
+            LocalDate.of(2000, parts[0].toInt(), parts[1].toInt())
+        }.getOrNull()
+    }
 }
