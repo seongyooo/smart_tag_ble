@@ -25,21 +25,19 @@ object BleConstants {
     val SERVICE_UUID: UUID = UUID.fromString("4fafc201-1fb5-459e-8fcc-c5c9c331914b")
     val PRICE_CHAR_UUID: UUID = UUID.fromString("beb5483e-36e1-4688-b7f5-ea07361b26a8")
     val ACK_CHAR_UUID: UUID = UUID.fromString("12345678-1234-1234-1234-123456789abc")
+    val CONFIG_CHAR_UUID: UUID = UUID.fromString("12345678-1234-1234-1234-123456789def")
     val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 }
 
 sealed class BleEvent {
     data class TagInfoReceived(
         val address: String,
+        val rssi: Int,
         val data: Type01Data
-    ) : BleEvent()
-    data class AnchorDetected(
-        val address: String,
-        val groupId: Int,
-        val rssi: Int
     ) : BleEvent()
     data class AckReceived(val address: String, val tagId: Int, val price: Int) : BleEvent()
     data class WriteSuccess(val address: String) : BleEvent()
+    data class ConfigWriteSuccess(val address: String, val tagId: Int) : BleEvent()
     data class Error(val address: String, val message: String) : BleEvent()
     object Disconnected : BleEvent()
 }
@@ -71,31 +69,22 @@ class BleManager(private val context: Context) {
             val device = result.device
             val record = result.scanRecord
 
-            // ── 제조사 데이터 파싱 (0x01 Tag Info, 0x03 Anchor Beacon) ──
+            // ── 제조사 데이터 파싱 (0x01 Tag Info) ──
             val mfgData = record?.getManufacturerSpecificData(COMPANY_ID)
-            if (mfgData != null) {
-                when (mfgData[0].toInt() and 0xFF) {
-                    0x01 -> {
-                        val parsed = BlePackets.parseType01(mfgData)
-                        if (parsed != null) {
-                            _bleEvents.value = BleEvent.TagInfoReceived(device.address, parsed)
-                            updateDiscoveredTag(device, result.rssi, parsed.tagId)
-                        }
-                        return
-                    }
-                    0x03 -> {
-                        val groupId = BlePackets.parseType03(mfgData)
-                        if (groupId != null) {
-                            _bleEvents.value = BleEvent.AnchorDetected(device.address, groupId, result.rssi)
-                        }
-                        return
-                    }
+            if (mfgData != null && mfgData[0].toInt() and 0xFF == 0x01) {
+                val parsed = BlePackets.parseType01(mfgData)
+                if (parsed != null) {
+                    _bleEvents.value = BleEvent.TagInfoReceived(device.address, result.rssi, parsed)
+                    updateDiscoveredTag(device, result.rssi, parsed.tagId)
                 }
+                return
             }
 
             // ── Service UUID 기반 GATT 서버 태그 ──
             val name = device.name ?: "SmartTag-${device.address.takeLast(5)}"
-            val tagId = parseTagId(device)
+            // 0x01 패킷에서 받은 tagId가 이미 있으면 유지 (parseTagId 추정값으로 덮어쓰지 않음)
+            val existingTagId = _discoveredTags.value[device.address]?.tagId ?: 0
+            val tagId = if (existingTagId > 0) existingTagId else parseTagId(device)
             updateDiscoveredTag(device, result.rssi, tagId, name)
         }
 
@@ -149,20 +138,11 @@ class BleManager(private val context: Context) {
             )
             .build()
 
-        // ── 필터 3: Type 0x03 제조사 데이터 (앵커 비콘) ──
-        val type03Filter = ScanFilter.Builder()
-            .setManufacturerData(
-                COMPANY_ID,
-                byteArrayOf(0x03.toByte()),
-                byteArrayOf(0xFF.toByte())
-            )
-            .build()
-
         val settings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
 
-        scanner?.startScan(listOf(serviceFilter, type01Filter, type03Filter), settings, scanCallback)
+        scanner?.startScan(listOf(serviceFilter, type01Filter), settings, scanCallback)
         _isScanning.value = true
         Log.d(TAG, "Scan started")
     }
@@ -278,6 +258,73 @@ class BleManager(private val context: Context) {
     }
 
     // ──────────────────────────────────────────────
+    // GATT 초기 설정 (TagID만 전송)
+    // ──────────────────────────────────────────────
+
+    fun connectAndWriteConfig(address: String, tagId: Int) {
+        val device = bluetoothAdapter?.getRemoteDevice(address) ?: run {
+            _bleEvents.value = BleEvent.Error(address, "디바이스를 찾을 수 없음")
+            return
+        }
+        activeGatt?.close()
+        activeGatt = device.connectGatt(
+            context, false,
+            configGattCallback(address, tagId),
+            BluetoothDevice.TRANSPORT_LE
+        )
+    }
+
+    private fun configGattCallback(address: String, tagId: Int) =
+        object : BluetoothGattCallback() {
+
+            override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+                when (newState) {
+                    BluetoothProfile.STATE_CONNECTED -> {
+                        Log.d(TAG, "Config: Connected to $address")
+                        Handler(Looper.getMainLooper()).postDelayed({ gatt.discoverServices() }, 600)
+                    }
+                    BluetoothProfile.STATE_DISCONNECTED -> {
+                        Log.d(TAG, "Config: Disconnected from $address")
+                        gatt.close()
+                        _bleEvents.value = BleEvent.Disconnected
+                    }
+                }
+            }
+
+            override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    _bleEvents.value = BleEvent.Error(address, "서비스 검색 실패")
+                    gatt.disconnect()
+                    return
+                }
+                val char = gatt.getService(BleConstants.SERVICE_UUID)
+                    ?.getCharacteristic(BleConstants.CONFIG_CHAR_UUID) ?: run {
+                    _bleEvents.value = BleEvent.Error(address, "Config Characteristic 없음 (펌웨어 확인)")
+                    gatt.disconnect()
+                    return
+                }
+                val bytes = byteArrayOf(tagId.toByte())  // TagID 1B만 전송
+                char.value = bytes
+                char.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                gatt.writeCharacteristic(char)
+            }
+
+            override fun onCharacteristicWrite(
+                gatt: BluetoothGatt,
+                characteristic: BluetoothGattCharacteristic,
+                status: Int
+            ) {
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    Log.d(TAG, "Config written: tagId=$tagId")
+                    _bleEvents.value = BleEvent.ConfigWriteSuccess(address, tagId)
+                } else {
+                    _bleEvents.value = BleEvent.Error(address, "설정 쓰기 실패 (status=$status)")
+                }
+                Handler(Looper.getMainLooper()).postDelayed({ gatt.disconnect() }, 200)
+            }
+        }
+
+    // ──────────────────────────────────────────────
     // Broadcast 그룹 일괄 수정
     // ──────────────────────────────────────────────
 
@@ -289,47 +336,53 @@ class BleManager(private val context: Context) {
      * entries는 최대 3개 (초과분은 자동으로 잘림)
      */
     fun broadcastPriceUpdate(
-        groupId: Int,
+        seq: Int,
         entries: List<PriceEntry>,
         durationMs: Long = 5000L
     ) {
-        val payload = BlePackets.buildType02(groupId, entries)
+        val payload = BlePackets.buildType02(seq, entries)
         startAdvertising(payload, durationMs)
-        Log.d(TAG, "broadcastPriceUpdate: group=$groupId entries=${entries.size}")
+        Log.d(TAG, "broadcastPriceUpdate: seq=$seq entries=${entries.size}")
     }
 
     /**
      * Type 0x04 상품명 업데이트 브로드캐스트 (다단편 순차 전송)
      * 각 단편을 fragDurationMs 동안 방송 후 다음 단편으로 진행
+     * onComplete: 마지막 단편의 Seq 번호를 콜백으로 반환
      */
     fun broadcastNameUpdate(
-        groupId: Int,
         tagId: Int,
         name: String,
+        startSeq: Int,
         fragDurationMs: Long = 1000L,
-        onComplete: () -> Unit = {}
+        onComplete: (lastFragSeq: Int) -> Unit = {}
     ) {
         val nameBytes = name.toByteArray(Charsets.UTF_8)
         val chunkSize = 18
         val totalFrags = if (nameBytes.isEmpty()) 1 else (nameBytes.size + chunkSize - 1) / chunkSize
+        val lastFragSeq = wrapSeq(startSeq + totalFrags - 1)
 
         fun sendFragment(index: Int) {
             if (index >= totalFrags) {
-                onComplete()
+                onComplete(lastFragSeq)
                 return
             }
+            val seq = wrapSeq(startSeq + index)
             val start = index * chunkSize
             val chunk = nameBytes.copyOfRange(start, minOf(start + chunkSize, nameBytes.size))
             val hasMore = index < totalFrags - 1
-            val payload = BlePackets.buildType04Fragment(groupId, tagId, index, hasMore, chunk)
+            val payload = BlePackets.buildType04Fragment(tagId, seq, index, hasMore, chunk)
             startAdvertising(payload, fragDurationMs) {
                 sendFragment(index + 1)
             }
-            Log.d(TAG, "broadcastNameUpdate: frag=$index/$totalFrags hasMore=$hasMore")
+            Log.d(TAG, "broadcastNameUpdate: frag=$index/$totalFrags seq=$seq hasMore=$hasMore")
         }
 
         sendFragment(0)
     }
+
+    /** Seq 번호 1..255 순환 래핑 */
+    private fun wrapSeq(s: Int): Int = ((s - 1) % 255) + 1
 
     private fun startAdvertising(
         payload: ByteArray,
@@ -382,6 +435,14 @@ class BleManager(private val context: Context) {
         val match = Regex("(\\d{1,3})$").find(name)
         return match?.value?.toIntOrNull()?.coerceIn(1, 255)
             ?: (device.address.filter { it.isDigit() }.takeLast(3).toIntOrNull()?.and(0xFF) ?: 0)
+    }
+
+    /** ConfigWriteSuccess 직후 스캔 결과를 기다리지 않고 즉시 메모리 반영 */
+    fun updateTagIdInDiscovered(address: String, tagId: Int) {
+        val current = _discoveredTags.value.toMutableMap()
+        val existing = current[address] ?: return
+        current[address] = existing.copy(tagId = tagId)
+        _discoveredTags.value = current
     }
 
     fun isBluetoothEnabled(): Boolean = bluetoothAdapter?.isEnabled == true

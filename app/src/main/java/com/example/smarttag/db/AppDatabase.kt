@@ -10,10 +10,11 @@ import com.example.smarttag.model.EventType
 import com.example.smarttag.model.TagStatus
 import java.time.LocalDate
 
-@Database(entities = [SmartTagEntity::class], version = 2, exportSchema = false)
+@Database(entities = [SmartTagEntity::class, CategoryEntity::class], version = 3, exportSchema = false)
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun smartTagDao(): SmartTagDao
+    abstract fun categoryDao(): CategoryDao
 
     companion object {
         @Volatile private var INSTANCE: AppDatabase? = null

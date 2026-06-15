@@ -2,7 +2,6 @@ package com.example.smarttag.ui.screen
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
@@ -12,7 +11,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.smarttag.ble.BlePackets
 import com.example.smarttag.viewmodel.ScanViewModel
@@ -29,7 +27,6 @@ fun NameUpdateScreen(
     val tag = tags.firstOrNull { it.deviceAddress == address }
 
     var nameInput by remember { mutableStateOf("") }
-    var groupIdInput by remember { mutableStateOf("") }
     var isSending by remember { mutableStateOf(false) }
     var isDone by remember { mutableStateOf(false) }
 
@@ -42,11 +39,9 @@ fun NameUpdateScreen(
         }
     }
 
-    // 기존 값 초기화 (tag가 로드된 후 한 번만)
     LaunchedEffect(tag?.deviceAddress) {
         tag?.let {
-            if (it.productName.isNotBlank()) nameInput = it.productName
-            groupIdInput = if (it.groupId > 0) it.groupId.toString() else ""
+            if (it.productName.isNotBlank() && nameInput.isBlank()) nameInput = it.productName
         }
     }
 
@@ -86,7 +81,7 @@ fun NameUpdateScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // 태그 정보 + Group ID 입력
+            // 태그 정보
             Card(shape = RoundedCornerShape(12.dp)) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("대상 태그", style = MaterialTheme.typography.labelMedium,
@@ -97,24 +92,14 @@ fun NameUpdateScreen(
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold
                         )
-                    }
-                    val groupId = groupIdInput.toIntOrNull() ?: 0
-                    OutlinedTextField(
-                        value = groupIdInput,
-                        onValueChange = { groupIdInput = it.filter(Char::isDigit) },
-                        label = { Text("Group ID") },
-                        modifier = Modifier.fillMaxWidth(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        isError = groupId == 0 && groupIdInput.isNotBlank(),
-                        supportingText = {
-                            if (groupId == 0)
-                                Text("ESP32의 MY_GROUP_ID와 일치해야 함 (기본값: 1)",
-                                    color = MaterialTheme.colorScheme.error)
-                            else
-                                Text("Group $groupId 태그만 수신")
+                        if (tag.groupId > 0) {
+                            Text(
+                                "카테고리: ${viewModel.getCategoryName(tag.groupId)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
-                    )
+                    }
                 }
             }
 
@@ -136,12 +121,12 @@ fun NameUpdateScreen(
                         }
                     )
 
-                    // 패킷 미리보기
+                    // 패킷 미리보기 (Seq=0 사용, 실제 전송 시에는 자동 할당됨)
                     if (nameInput.isNotBlank() && tag != null) {
                         val chunk = nameBytes.copyOf(minOf(18, nameBytes.size))
                         val payload = BlePackets.buildType04Fragment(
-                            groupId   = tag.groupId,
                             tagId     = tag.tagId,
+                            seq       = 0,
                             fragIndex = 0,
                             hasMore   = fragCount > 1,
                             nameChunk = chunk
@@ -153,7 +138,7 @@ fun NameUpdateScreen(
                         ) {
                             Column(modifier = Modifier.padding(10.dp),
                                 verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text("첫 번째 단편 미리보기",
+                                Text("첫 번째 단편 미리보기 (Seq는 전송 시 자동 할당)",
                                     style = MaterialTheme.typography.labelSmall)
                                 Text(
                                     "FF FF $hex",
@@ -165,17 +150,14 @@ fun NameUpdateScreen(
                     }
 
                     // 전송 버튼
-                    val resolvedGroupId = groupIdInput.toIntOrNull() ?: 0
-                    val canSend = nameInput.isNotBlank() && resolvedGroupId > 0
-                                  && !isSending && !isDone && tag != null
+                    val canSend = nameInput.isNotBlank() && !isSending && !isDone && tag != null
                     Button(
                         onClick = {
-                            if (tag == null || resolvedGroupId == 0) return@Button
+                            if (tag == null) return@Button
                             isSending = true
                             isDone    = false
                             viewModel.broadcastTagName(
                                 address  = address,
-                                groupId  = resolvedGroupId,
                                 tagId    = tag.tagId,
                                 name     = nameInput,
                                 onComplete = {

@@ -2,7 +2,6 @@ package com.example.smarttag.ble
 
 import com.example.smarttag.model.EventType
 import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.time.LocalDate
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
@@ -25,7 +24,7 @@ data class Type01Data(
     val tagId: Int,
     val price: Int,
     val event: EventType,
-    val stateCrc: Int         // CRC16 (0~65535)
+    val lastSeq: Int           // 태그가 마지막으로 처리 완료한 Seq (0=없음)
 )
 
 // ──────────────────────────────────────────────────────────────
@@ -37,44 +36,11 @@ object BlePackets {
     // 사전 공유키 (데모 하드코딩 — 펌웨어와 동일해야 함)
     private val HMAC_KEY = "SmartTagDemo2026".toByteArray(Charsets.UTF_8)
 
-    // ── CRC16-CCITT (poly 0x1021, init 0xFFFF) ────────────────
-    fun crc16(data: ByteArray): Int {
-        var crc = 0xFFFF
-        for (b in data) {
-            crc = crc xor ((b.toInt() and 0xFF) shl 8)
-            repeat(8) {
-                crc = if (crc and 0x8000 != 0) (crc shl 1) xor 0x1021 else crc shl 1
-                crc = crc and 0xFFFF
-            }
-        }
-        return crc
-    }
-
     // ── HMAC-SHA256 앞 24bit (3바이트) ────────────────────────
     fun hmac24(data: ByteArray): ByteArray {
         val mac = Mac.getInstance("HmacSHA256")
         mac.init(SecretKeySpec(HMAC_KEY, "HmacSHA256"))
         return mac.doFinal(data).copyOf(3)
-    }
-
-    // ── StateCRC = CRC16(Price|Event|Start|End|Name) ──────────
-    // 앱이 태그 CRC와 비교할 목표 CRC 계산
-    fun calculateTargetCrc(
-        price: Int,
-        event: EventType,
-        startDate: LocalDate?,
-        endDate: LocalDate?,
-        productName: String
-    ): Int {
-        val nameBytes = productName.toByteArray(Charsets.UTF_8)
-        val buf = ByteBuffer.allocate(4 + 1 + 2 + 2 + nameBytes.size)
-            .order(ByteOrder.LITTLE_ENDIAN)
-        buf.putInt(price)
-        buf.put(event.code.toByte())
-        buf.putShort(encodeDate(startDate).toShort())
-        buf.putShort(encodeDate(endDate).toShort())
-        buf.put(nameBytes)
-        return crc16(buf.array())
     }
 
     // ── 날짜 → 9bit 인코딩: [Month 4bit][Day 5bit], 0=없음 ───
@@ -117,17 +83,18 @@ object BlePackets {
     private val END_MARKER = ByteArray(6)
 
     // ── Type 0x02 페이로드 빌드 (25B, Company ID 이후) ─────────
-    //  [0x02][GroupID][Entry×3 18B][HMAC 3B][Rsv 2B] = 25B
-    fun buildType02(groupId: Int, entries: List<PriceEntry>): ByteArray {
+    //  [0x02][Seq 1B][Entry×3 18B][HMAC 3B][Rsv 2B] = 25B
+    //  HMAC: HMAC(key, [0x02 | Seq | Entry×3]) 앞 24bit
+    fun buildType02(seq: Int, entries: List<PriceEntry>): ByteArray {
         val buf = ByteBuffer.allocate(25)
         buf.put(0x02.toByte())
-        buf.put(groupId.toByte())
+        buf.put(seq.toByte())
 
         val packedEntries = entries.take(3).map { packEntry(it) }
         packedEntries.forEach { buf.put(it) }
         repeat(3 - packedEntries.size) { buf.put(END_MARKER) }  // End Marker 패딩
 
-        // HMAC: [Type | GroupID | Entries] 서명
+        // HMAC: [Type | Seq | Entries] 서명
         val toSign = buf.array().copyOf(buf.position())
         buf.put(hmac24(toSign))
         buf.put(ByteArray(2))  // Reserved
@@ -135,19 +102,20 @@ object BlePackets {
     }
 
     // ── Type 0x04 단편 페이로드 빌드 (25B, Company ID 이후) ────
-    //  [0x04][GroupID][TagID][Frag][Name 18B][HMAC 3B] = 25B
+    //  [0x04][TagID][Seq][Frag][Name 18B][HMAC 3B] = 25B
     //  Frag: [MORE 1bit][Index 7bit]
+    //  HMAC: HMAC(key, [0x04 | TagID | Seq | Frag | Name18B]) 앞 24bit
     fun buildType04Fragment(
-        groupId: Int,
         tagId: Int,
+        seq: Int,
         fragIndex: Int,
         hasMore: Boolean,
         nameChunk: ByteArray   // 최대 18B, 부족하면 0x00 패딩
     ): ByteArray {
         val buf = ByteBuffer.allocate(25)
         buf.put(0x04.toByte())
-        buf.put(groupId.toByte())
         buf.put(tagId.toByte())
+        buf.put(seq.toByte())
         val fragByte = ((if (hasMore) 1 else 0) shl 7) or (fragIndex and 0x7F)
         buf.put(fragByte.toByte())
         buf.put(nameChunk.copyOf(18))  // 18B 고정
@@ -158,23 +126,18 @@ object BlePackets {
         return buf.array()
     }
 
-    // ── Type 0x01 파싱 (Company ID 이후 9B) ───────────────────
-    //  [0x01][TagID][Price 4B LE][Event][CRC 2B LE]
+    // ── Type 0x01 파싱 (Company ID 이후 8B) ───────────────────
+    //  [0x01][TagID][Price 3B LE][Event][LastSeq][Rsvd]
     fun parseType01(mfgData: ByteArray): Type01Data? {
-        if (mfgData.size < 9) return null
+        if (mfgData.size < 8) return null
         if (mfgData[0].toInt() and 0xFF != 0x01) return null
         val tagId = mfgData[1].toInt() and 0xFF
-        val price = ByteBuffer.wrap(mfgData, 2, 4).order(ByteOrder.LITTLE_ENDIAN).int
-        val event = EventType.fromCode(mfgData[6].toInt() and 0x03)
-        val crc   = ByteBuffer.wrap(mfgData, 7, 2).order(ByteOrder.LITTLE_ENDIAN).short.toInt() and 0xFFFF
-        return Type01Data(tagId, price, event, crc)
-    }
-
-    // ── Type 0x03 파싱 (Company ID 이후 2B) ───────────────────
-    //  [0x03][GroupID]
-    fun parseType03(mfgData: ByteArray): Int? {
-        if (mfgData.size < 2) return null
-        if (mfgData[0].toInt() and 0xFF != 0x03) return null
-        return mfgData[1].toInt() and 0xFF
+        // Price 3B LE
+        val price = (mfgData[2].toInt() and 0xFF) or
+                    ((mfgData[3].toInt() and 0xFF) shl 8) or
+                    ((mfgData[4].toInt() and 0xFF) shl 16)
+        val event   = EventType.fromCode(mfgData[5].toInt() and 0x03)
+        val lastSeq = mfgData[6].toInt() and 0xFF
+        return Type01Data(tagId, price, event, lastSeq)
     }
 }

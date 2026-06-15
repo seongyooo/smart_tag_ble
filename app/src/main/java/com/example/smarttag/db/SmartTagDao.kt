@@ -56,6 +56,9 @@ interface SmartTagDao {
         endDate: LocalDate?
     )
 
+    @Query("UPDATE smart_tags SET tagId = :tagId WHERE deviceAddress = :address")
+    suspend fun setTagId(address: String, tagId: Int)
+
     @Query("UPDATE smart_tags SET groupId = :groupId WHERE deviceAddress = :address")
     suspend fun setGroupId(address: String, groupId: Int)
 

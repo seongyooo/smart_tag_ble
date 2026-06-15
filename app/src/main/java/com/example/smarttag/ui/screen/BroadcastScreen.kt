@@ -28,7 +28,7 @@ fun BroadcastScreen(
 ) {
     var groupIdInput by remember { mutableStateOf("1") }
     var tagIdInput by remember { mutableStateOf("2") }
-    var priceInput by remember { mutableStateOf("") }
+    var priceInput by remember { mutableStateOf("") }   // 직접 전송 모드에서만 사용
     var isBroadcasting by remember { mutableStateOf(false) }
     var directMode by remember { mutableStateOf(true) }  // true = 특정 TagID 직접 전송
 
@@ -86,15 +86,6 @@ fun BroadcastScreen(
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Broadcast 설정", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
 
-                    OutlinedTextField(
-                        value = groupIdInput,
-                        onValueChange = { groupIdInput = it.filter { c -> c.isDigit() } },
-                        label = { Text("Group ID") },
-                        modifier = Modifier.fillMaxWidth(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true
-                    )
-
                     if (directMode) {
                         OutlinedTextField(
                             value = tagIdInput,
@@ -105,37 +96,42 @@ fun BroadcastScreen(
                             singleLine = true,
                             supportingText = { Text("ESP32에 설정된 MY_TAG_ID와 일치해야 함") }
                         )
+                        OutlinedTextField(
+                            value = priceInput,
+                            onValueChange = { priceInput = it.filter { c -> c.isDigit() } },
+                            label = { Text("가격 (원)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            suffix = { Text("원") }
+                        )
+                    } else {
+                        OutlinedTextField(
+                            value = groupIdInput,
+                            onValueChange = { groupIdInput = it.filter { c -> c.isDigit() } },
+                            label = { Text("Group ID") },
+                            modifier = Modifier.fillMaxWidth(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            supportingText = { Text("해당 그룹 내 태그들의 개별 설정 가격/이벤트로 전송됨") }
+                        )
                     }
-
-                    OutlinedTextField(
-                        value = priceInput,
-                        onValueChange = { priceInput = it.filter { c -> c.isDigit() } },
-                        label = { Text("가격 (원)") },
-                        modifier = Modifier.fillMaxWidth(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        suffix = { Text("원") }
-                    )
                 }
             }
 
-            // BLE 패킷 미리보기
+            // BLE 패킷 미리보기 (직접 전송 모드에서만)
             val groupId = groupIdInput.toIntOrNull() ?: 1
             val tagId = tagIdInput.toIntOrNull() ?: 2
             val price = priceInput.toIntOrNull() ?: 0
-            if (priceInput.isNotBlank() && groupIdInput.isNotBlank()) {
-                BroadcastPreview(
-                    groupId = groupId,
-                    tagId = if (directMode) tagId else 0xFF,
-                    price = price,
-                    directMode = directMode
-                )
+            if (directMode && priceInput.isNotBlank()) {
+                BroadcastPreview(tagId = tagId, price = price)
             }
 
             Spacer(modifier = Modifier.weight(1f))
 
             // 전송 버튼
-            val canBroadcast = priceInput.isNotBlank() && (!directMode || tagIdInput.isNotBlank())
+            val canBroadcast = if (directMode) priceInput.isNotBlank() && tagIdInput.isNotBlank()
+                               else groupIdInput.isNotBlank()
             Button(
                 onClick = {
                     if (isBroadcasting) {
@@ -143,9 +139,9 @@ fun BroadcastScreen(
                         isBroadcasting = false
                     } else {
                         if (directMode) {
-                            viewModel.broadcastDirect(groupId, tagId, price)
+                            viewModel.broadcastDirect(tagId, price)
                         } else {
-                            viewModel.startGroupBroadcast(groupId, price)
+                            viewModel.startGroupBroadcast(groupId)
                         }
                         isBroadcasting = true
                     }
@@ -185,7 +181,7 @@ fun BroadcastScreen(
                             if (directMode)
                                 "Tag $tagId → ${"%,d원".format(price)} Advertising 중... 5초 후 자동 중지"
                             else
-                                "Group $groupId Advertising 중... 5초 후 자동 중지",
+                                "Group $groupId PENDING 태그 순차 전송 중...",
                             style = MaterialTheme.typography.bodyMedium
                         )
                     }
@@ -234,7 +230,7 @@ fun BroadcastScreen(
 }
 
 @Composable
-private fun BroadcastPreview(groupId: Int, tagId: Int, price: Int, directMode: Boolean) {
+private fun BroadcastPreview(tagId: Int, price: Int) {
     val sampleEntry = PriceEntry(
         tagId = tagId,
         price = price,
@@ -242,7 +238,7 @@ private fun BroadcastPreview(groupId: Int, tagId: Int, price: Int, directMode: B
         startDate = null,
         endDate = null
     )
-    val payload = BlePackets.buildType02(groupId, listOf(sampleEntry))
+    val payload = BlePackets.buildType02(seq = 0, listOf(sampleEntry))  // seq=0: 미리보기용
     val payloadHex = payload.joinToString(" ") { "%02X".format(it.toInt() and 0xFF) }
 
     Card(
@@ -258,10 +254,7 @@ private fun BroadcastPreview(groupId: Int, tagId: Int, price: Int, directMode: B
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
-                text = if (directMode)
-                    "Group $groupId, Tag $tagId → ${"%,d원".format(price)}"
-                else
-                    "Group $groupId (PENDING 태그) → ${"%,d원".format(price)}",
+                text = "Tag $tagId → ${"%,d원".format(price)}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.secondary
             )

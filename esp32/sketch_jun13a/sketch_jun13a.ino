@@ -3,7 +3,7 @@
  * Board : LILYGO LORA32 T3_V1.6.1 (ESP32 + SSD1306)
  * Lib   : NimBLE-Arduino, Adafruit_SSD1306
  *
- * ★ 보드마다 MY_TAG_ID / MY_GROUP_ID 변경
+ * ★ 보드마다 MY_TAG_ID 변경 (GroupID는 앱 UI 전용, 펌웨어 불필요)
  */
 
 #include <Wire.h>
@@ -23,11 +23,9 @@
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 // ─────────────────────────────────────────────────────
-// 태그 설정 (보드마다 변경!)
+// 태그 설정 기본값 (NVS에 저장된 값이 있으면 그 값을 사용)
 // ─────────────────────────────────────────────────────
-#define MY_TAG_ID     2       // 1~255
-#define MY_TAG_ID_STR "002"  // MY_TAG_ID와 항상 맞출 것
-#define MY_GROUP_ID   1      // 같은 매대는 동일
+#define TAG_ID_DEFAULT   2    // NVS 미설정 시 사용할 기본 Tag ID
 
 #define COMPANY_ID   0xFFFF
 
@@ -37,6 +35,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 #define SERVICE_UUID    "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define PRICE_CHAR_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 #define ACK_CHAR_UUID   "12345678-1234-1234-1234-123456789abc"
+#define CONFIG_CHAR_UUID "12345678-1234-1234-1234-123456789def"  // [TagID 1B] Write
 
 // ─────────────────────────────────────────────────────
 // HMAC 공유키 (앱과 완전히 동일해야 함)
@@ -47,6 +46,8 @@ static const size_t  HMAC_KEY_LEN = 16;
 // ─────────────────────────────────────────────────────
 // 전역 상태
 // ─────────────────────────────────────────────────────
+static uint8_t  g_tagId   = TAG_ID_DEFAULT;    // NVS 로드 후 결정
+static uint8_t  g_lastSeq = 0;                 // 마지막으로 처리 완료한 Seq (0=없음)
 static uint32_t g_price  = 0;
 static uint8_t  g_event  = 0;   // 0=없음 1=1+1 2=2+1 3=할인
 static uint8_t  g_startM = 0, g_startD = 0;
@@ -65,19 +66,7 @@ static volatile bool needUpdate = false;  // loop()에서 OLED+Adv 갱신 트리
 static uint8_t nameFrag[MAX_FRAGS][FRAG_SIZE];
 static bool    fragRcvd[MAX_FRAGS] = {};
 static int     lastFragIdx = -1;
-
-// ─────────────────────────────────────────────────────
-// CRC16-CCITT  (poly 0x1021, init 0xFFFF)
-// ─────────────────────────────────────────────────────
-static uint16_t crc16(const uint8_t* d, size_t len) {
-    uint16_t crc = 0xFFFF;
-    for (size_t i = 0; i < len; i++) {
-        crc ^= (uint16_t)d[i] << 8;
-        for (int j = 0; j < 8; j++)
-            crc = (crc & 0x8000) ? (crc << 1) ^ 0x1021 : crc << 1;
-    }
-    return crc;
-}
+static uint8_t nameFragSeq = 0;  // 마지막 단편의 Seq
 
 // ─────────────────────────────────────────────────────
 // HMAC-SHA256 앞 3바이트 검증
@@ -95,61 +84,40 @@ static bool verifyHmac24(const uint8_t* data, size_t len, const uint8_t* exp3) {
 }
 
 // ─────────────────────────────────────────────────────
-// StateCRC = CRC16(Price 4B LE | Event | Start 2B LE | End 2B LE | Name)
-// 앱의 BlePackets.calculateTargetCrc() 와 완전히 동일한 계산
-// ─────────────────────────────────────────────────────
-static uint16_t calcStateCrc() {
-    uint8_t buf[4 + 1 + 2 + 2 + sizeof(g_name)];
-    size_t off = 0;
-
-    memcpy(buf + off, &g_price, 4);  off += 4;
-    buf[off++] = g_event;
-
-    uint16_t s = (uint16_t)(((g_startM & 0xF) << 5) | (g_startD & 0x1F));
-    buf[off++] = s & 0xFF;  buf[off++] = s >> 8;
-
-    uint16_t e = (uint16_t)(((g_endM & 0xF) << 5) | (g_endD & 0x1F));
-    buf[off++] = e & 0xFF;  buf[off++] = e >> 8;
-
-    size_t nl = strlen(g_name);
-    memcpy(buf + off, g_name, nl);  off += nl;
-
-    return crc16(buf, off);
-}
-
-// ─────────────────────────────────────────────────────
 // NVS 저장
 // ─────────────────────────────────────────────────────
 static void saveState() {
     prefs.begin("smarttag", false);
-    prefs.putUInt("price",  g_price);
-    prefs.putUChar("event", g_event);
-    prefs.putUChar("sm",    g_startM);
-    prefs.putUChar("sd",    g_startD);
-    prefs.putUChar("em",    g_endM);
-    prefs.putUChar("ed",    g_endD);
+    prefs.putUChar("tagId",  g_tagId);
+    prefs.putUInt("price",   g_price);
+    prefs.putUChar("event",  g_event);
+    prefs.putUChar("sm",     g_startM);
+    prefs.putUChar("sd",     g_startD);
+    prefs.putUChar("em",     g_endM);
+    prefs.putUChar("ed",     g_endD);
     prefs.end();
 }
 
 // ─────────────────────────────────────────────────────
 // Type 0x01 Advertising 업데이트
-// Primary: [CompID 2B][0x01][TagID][Price 4B LE][Event][CRC 2B LE] = 11B
-// Scan Response: Service UUID (18B)
+// [CompID 2B][0x01][TagID][Price 3B LE][Event][LastSeq][Rsvd] = 10B
 // ─────────────────────────────────────────────────────
 static void updateAdvertising() {
-    uint16_t crc = calcStateCrc();
-    uint8_t mfg[11];
+    uint8_t mfg[10];
     mfg[0] = 0xFF;  mfg[1] = 0xFF;  // Company ID LE
     mfg[2] = 0x01;                   // Type
-    mfg[3] = MY_TAG_ID;
-    memcpy(mfg + 4, &g_price, 4);
-    mfg[8]  = g_event;
-    mfg[9]  = crc & 0xFF;
-    mfg[10] = crc >> 8;
+    mfg[3] = g_tagId;
+    // Price 3B LE (최대 16,777,215원)
+    mfg[4] = (g_price)       & 0xFF;
+    mfg[5] = (g_price >> 8)  & 0xFF;
+    mfg[6] = (g_price >> 16) & 0xFF;
+    mfg[7] = g_event;
+    mfg[8] = g_lastSeq;
+    mfg[9] = 0x00;  // Reserved
 
     NimBLEAdvertising* pAdv = NimBLEDevice::getAdvertising();
     pAdv->stop();
-    pAdv->setManufacturerData(std::string((char*)mfg, 11));
+    pAdv->setManufacturerData(std::string((char*)mfg, 10));
     pAdv->start(0);
 }
 
@@ -163,7 +131,7 @@ static void updateOLED() {
 
     // 상단: 상품명 (없으면 TAG-XXX)
     char tagLabel[12];
-    snprintf(tagLabel, sizeof(tagLabel), "TAG-%03d", MY_TAG_ID);
+    snprintf(tagLabel, sizeof(tagLabel), "TAG-%03d", g_tagId);
     display.setCursor(0, 0);
     display.print(strlen(g_name) > 0 ? g_name : tagLabel);
 
@@ -239,8 +207,8 @@ class PriceCallbacks : public NimBLECharacteristicCallbacks {
         if (pAckChar) {
             uint8_t ack[7] = {
                 0xAA,
-                (uint8_t)(MY_TAG_ID & 0xFF),
-                (uint8_t)(MY_TAG_ID >> 8)
+                (uint8_t)(g_tagId & 0xFF),
+                (uint8_t)(g_tagId >> 8)
             };
             memcpy(ack + 3, &g_price, 4);
             pAckChar->setValue(ack, 7);
@@ -256,6 +224,37 @@ class ServerCallbacks : public NimBLEServerCallbacks {
         // 연결 해제 후 최신 상태로 재광고
         updateAdvertising();
         Serial.println("[GATT] Disconnected, adv restarted");
+    }
+};
+
+// ─────────────────────────────────────────────────────
+// GATT Config 콜백  ([TagID 1B] → NVS 저장 → 재광고)
+// ─────────────────────────────────────────────────────
+class ConfigCallbacks : public NimBLECharacteristicCallbacks {
+    void onWrite(NimBLECharacteristic* pChar, NimBLEConnInfo& connInfo) override {
+        std::string val = pChar->getValue();
+        if (val.length() < 1) {
+            Serial.println("[Config] 패킷 길이 오류 (최소 1B 필요)");
+            return;
+        }
+
+        uint8_t newTagId = (uint8_t)val[0];
+
+        if (newTagId == 0) {
+            Serial.println("[Config] TagID는 0이 될 수 없음 → 무시");
+            return;
+        }
+
+        g_tagId = newTagId;
+
+        // NVS 저장
+        prefs.begin("smarttag", false);
+        prefs.putUChar("tagId", g_tagId);
+        prefs.end();
+
+        Serial.printf("[Config] TagID=%d → NVS 저장 완료\n", g_tagId);
+
+        needUpdate = true;  // OLED + Advertising 갱신
     }
 };
 
@@ -277,18 +276,20 @@ class BroadcastCallbacks : public NimBLEScanCallbacks {
         uint8_t type = d[2];
 
         // ── Type 0x02: 가격/이벤트/날짜 업데이트 ────────────────
-        //  [CompID 2B][0x02][GroupID][Entry×3 18B][HMAC 3B][Rsv 2B] = 27B
+        //  [CompID 2B][0x02][Seq][Entry×3 18B][HMAC 3B][Rsv 2B] = 27B
         if (type == 0x02) {
             if (len < 27) return;
-            if (d[3] != MY_GROUP_ID) return;
 
-            // HMAC 검증: sign = d[2..21] (Type+GroupID+Entries = 20B)
+            uint8_t rxSeq = d[3];  // Seq 번호
+
+            // HMAC 검증: sign = d[2..21] (Type+Seq+Entries = 20B)
             if (!verifyHmac24(d + 2, 20, d + 22)) {
                 Serial.println("[0x02] HMAC 불일치 → 폐기");
                 return;
             }
 
             // Entry 3개 파싱 (48bit 빅엔디언 × 3)
+            bool matched = false;
             for (int i = 0; i < 3; i++) {
                 const uint8_t* ent = d + 4 + i * 6;
 
@@ -298,7 +299,7 @@ class BroadcastCallbacks : public NimBLEScanCallbacks {
 
                 uint8_t tagId = (v >> 40) & 0xFF;
                 if (tagId == 0x00) break;           // End Marker
-                if (tagId != MY_TAG_ID) continue;   // 내 태그 아님
+                if (tagId != g_tagId) continue;     // 내 태그 아님
 
                 g_price  = (uint32_t)(((v >> 20) & 0xFFFFF) * 10);
                 g_event  = (v >> 18) & 0x03;
@@ -308,23 +309,27 @@ class BroadcastCallbacks : public NimBLEScanCallbacks {
                 g_endM   = (eb >> 5) & 0xF;  g_endD   = eb & 0x1F;
 
                 saveState();
+                g_lastSeq = rxSeq;  // ACK용 Seq 기록
+                matched = true;
                 needUpdate = true;
-                Serial.printf("[0x02] Tag%d Price=%lu Event=%d Date=%02d/%02d~%02d/%02d\n",
-                              MY_TAG_ID, (unsigned long)g_price, g_event,
+                Serial.printf("[0x02] Tag%d Seq=%d Price=%lu Event=%d Date=%02d/%02d~%02d/%02d\n",
+                              g_tagId, rxSeq, (unsigned long)g_price, g_event,
                               g_startM, g_startD, g_endM, g_endD);
                 break;
             }
+            (void)matched;
             return;
         }
 
         // ── Type 0x04: 상품명 업데이트 (단편 조립) ───────────────
-        //  [CompID 2B][0x04][GroupID][TagID][Frag][Name 18B][HMAC 3B] = 27B
+        //  [CompID 2B][0x04][TagID][Seq][Frag][Name 18B][HMAC 3B] = 27B
         if (type == 0x04) {
             if (len < 27) return;
-            if (d[3] != MY_GROUP_ID) return;
-            if (d[4] != MY_TAG_ID)   return;
+            if (d[3] != g_tagId) return;  // TagID 확인
 
-            // HMAC 검증: sign = d[2..23] (Type+GroupID+TagID+Frag+Name = 22B)
+            uint8_t rxSeq = d[4];  // Seq 번호
+
+            // HMAC 검증: sign = d[2..23] (Type+TagID+Seq+Frag+Name = 22B)
             if (!verifyHmac24(d + 2, 22, d + 24)) {
                 Serial.println("[0x04] HMAC 불일치 → 폐기");
                 return;
@@ -337,9 +342,12 @@ class BroadcastCallbacks : public NimBLEScanCallbacks {
 
             memcpy(nameFrag[fragIdx], d + 6, FRAG_SIZE);
             fragRcvd[fragIdx] = true;
-            if (!hasMore) lastFragIdx = fragIdx;
+            if (!hasMore) {
+                lastFragIdx = fragIdx;
+                nameFragSeq = rxSeq;  // 마지막 단편 Seq 기록
+            }
 
-            Serial.printf("[0x04] Frag %d %s\n", fragIdx, hasMore ? "(more)" : "(last)");
+            Serial.printf("[0x04] Frag %d Seq=%d %s\n", fragIdx, rxSeq, hasMore ? "(more)" : "(last)");
 
             // 마지막 단편까지 모두 수신되면 조립
             if (lastFragIdx >= 0) {
@@ -362,12 +370,15 @@ class BroadcastCallbacks : public NimBLEScanCallbacks {
                     prefs.putString("name", g_name);
                     prefs.end();
 
+                    g_lastSeq = nameFragSeq;  // ACK용 Seq 기록
+
                     // 단편 버퍼 초기화
                     memset(fragRcvd, false, sizeof(fragRcvd));
                     lastFragIdx = -1;
+                    nameFragSeq = 0;
 
                     needUpdate = true;
-                    Serial.printf("[0x04] Name saved: %s\n", g_name);
+                    Serial.printf("[0x04] Name saved: %s (lastSeq=%d)\n", g_name, g_lastSeq);
                 }
             }
         }
@@ -394,11 +405,9 @@ void setup() {
     display.print("Initializing...");
     display.display();
 
-    // BLE 초기화 (NVS보다 먼저 — 순서 중요)
-    NimBLEDevice::init("SmartTag-" MY_TAG_ID_STR);
-
-    // NVS에서 이전 상태 복원
+    // NVS에서 이전 상태 복원 (BLE 초기화 전 tagId 확보 필요)
     prefs.begin("smarttag", true);
+    g_tagId  = prefs.getUChar("tagId",  TAG_ID_DEFAULT);
     g_price  = prefs.getUInt("price",  0);
     g_event  = prefs.getUChar("event", 0);
     g_startM = prefs.getUChar("sm",    0);
@@ -408,8 +417,13 @@ void setup() {
     String nameStr = prefs.getString("name", "");
     strncpy(g_name, nameStr.c_str(), sizeof(g_name) - 1);
     prefs.end();
-    Serial.printf("[NVS] Price=%lu Event=%d Name=%s\n",
-                  (unsigned long)g_price, g_event, g_name);
+    Serial.printf("[NVS] TagID=%d Price=%lu Event=%d Name=%s\n",
+                  g_tagId, (unsigned long)g_price, g_event, g_name);
+
+    // BLE 초기화 (장치명은 TagID 기반)
+    char deviceName[16];
+    snprintf(deviceName, sizeof(deviceName), "SmartTag-%03d", g_tagId);
+    NimBLEDevice::init(deviceName);
 
     // GATT Server
     NimBLEServer* pServer = NimBLEDevice::createServer();
@@ -427,9 +441,13 @@ void setup() {
         ACK_CHAR_UUID, NIMBLE_PROPERTY::NOTIFY
     );
 
-    // NimBLE-Arduino 2.x: pService->start() 는 no-op.
-    // 반드시 pServer->start() 를 호출해야 GATT 등록이 완료됨.
-    // 스캔/광고 시작 전에 호출해야 함 (mutable 상태).
+    // Config Char (WRITE) — [TagID 1B]
+    NimBLECharacteristic* pConfigChar = pService->createCharacteristic(
+        CONFIG_CHAR_UUID, NIMBLE_PROPERTY::WRITE
+    );
+    pConfigChar->setCallbacks(new ConfigCallbacks());
+
+    // NimBLE-Arduino 2.x: pServer->start() 를 호출해야 GATT 등록이 완료됨.
     pServer->start();
 
     // Scan Response : Service UUID — Android GATT 연결 필터용
