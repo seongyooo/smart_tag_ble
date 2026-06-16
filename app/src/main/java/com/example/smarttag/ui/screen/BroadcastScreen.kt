@@ -1,7 +1,6 @@
 package com.example.smarttag.ui.screen
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.rememberScrollState
@@ -9,7 +8,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Campaign
-import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -71,48 +69,6 @@ fun BroadcastScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // ── 테스트 데이터 세트 ──────────────────────────────────
-            var showSummary by remember { mutableStateOf(false) }
-            Card(shape = RoundedCornerShape(12.dp)) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Icon(Icons.Default.Science, contentDescription = null,
-                            tint = MaterialTheme.colorScheme.tertiary,
-                            modifier = Modifier.size(18.dp))
-                        Text("테스트 데이터 세트",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold)
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = { viewModel.applyTestDataset("A") },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("세트 A 적용")
-                        }
-                        Button(
-                            onClick = { viewModel.applyTestDataset("B") },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("세트 B 적용")
-                        }
-                    }
-                    TextButton(
-                        onClick = { showSummary = !showSummary },
-                        contentPadding = PaddingValues(0.dp)
-                    ) {
-                        Text(
-                            if (showSummary) "세트 내용 닫기 ▲" else "세트 내용 보기 ▼",
-                            style = MaterialTheme.typography.labelMedium
-                        )
-                    }
-                    if (showSummary) TestDatasetSummary()
-                }
-            }
-
             // 모드 선택
             Card(shape = RoundedCornerShape(12.dp)) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -265,59 +221,6 @@ fun BroadcastScreen(
                     else -> {}
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun TestDatasetSummary() {
-    val rows = listOf(
-        // tagId, "이름 / 가격 / 이벤트(날짜)" for A and B
-        listOf("Tag", "세트 A", "세트 B"),
-        listOf("1", "Shin Ramen\n1,100원",            "Beef Bulgogi\n5,000원 SALE 6/1~30"),
-        listOf("2", "Jin Ramen\n1,500원 1+1 6/1~30", "Jeju Pork\n8,900원"),
-        listOf("3", "Samdasoo 2L\n2,000원",           "Wild Flatfish\n12,000원 1+1 6/20~30"),
-        listOf("4", "Shrimp Snack\n980원 SALE 6/15~20", "Organic Apple\n3,500원 2+1"),
-        listOf("5", "Cantata Coffee\n3,200원 2+1 6/1~15", "Shine Muscat\n15,000원"),
-        listOf("6", "Gum\n500원",                     "Premium Milk\n2,200원 1+1 6/1~15"),
-        listOf("7", "Pepero\n1,800원 1+1",            "Imported Cheese\n9,800원 SALE 6/15~20"),
-        listOf("8", "Ottogi Rice\n4,500원",            "Sesame Oil Set\n22,000원"),
-        listOf("9", "Pocari Sweat\n780원 SALE 6/10~25", "Mentaiko\n4,400원 2+1 6/1~30"),
-    )
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp)
-    ) {
-        rows.forEachIndexed { idx, row ->
-            val isHeader = idx == 0
-            Row(modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    row[0],
-                    modifier = Modifier.width(32.dp),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = if (isHeader) FontWeight.Bold else FontWeight.Normal,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    row[1],
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = if (isHeader) FontWeight.Bold else FontWeight.Normal,
-                    color = if (isHeader) MaterialTheme.colorScheme.onSurfaceVariant
-                            else MaterialTheme.colorScheme.primary
-                )
-                Text(
-                    row[2],
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = if (isHeader) FontWeight.Bold else FontWeight.Normal,
-                    color = if (isHeader) MaterialTheme.colorScheme.onSurfaceVariant
-                            else MaterialTheme.colorScheme.secondary
-                )
-            }
-            if (isHeader) HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
         }
     }
 }

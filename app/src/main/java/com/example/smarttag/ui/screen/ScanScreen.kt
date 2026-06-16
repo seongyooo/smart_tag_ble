@@ -63,8 +63,32 @@ fun ScanScreen(
                             else MaterialTheme.colorScheme.onPrimaryContainer
                         )
                     }
-                    IconButton(onClick = onCategoryManageClick) {
-                        Icon(Icons.Default.Settings, contentDescription = "카테고리 관리")
+                    var menuExpanded by remember { mutableStateOf(false) }
+                    Box {
+                        IconButton(onClick = { menuExpanded = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "메뉴")
+                        }
+                        DropdownMenu(
+                            expanded = menuExpanded,
+                            onDismissRequest = { menuExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("카테고리 관리") },
+                                leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                                onClick = { menuExpanded = false; onCategoryManageClick() }
+                            )
+                            HorizontalDivider()
+                            DropdownMenuItem(
+                                text = { Text("테스트 세트 A 적용") },
+                                leadingIcon = { Icon(Icons.Default.Science, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                                onClick = { menuExpanded = false; viewModel.applyTestDataset("A") }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("테스트 세트 B 적용") },
+                                leadingIcon = { Icon(Icons.Default.Science, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                                onClick = { menuExpanded = false; viewModel.applyTestDataset("B") }
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
