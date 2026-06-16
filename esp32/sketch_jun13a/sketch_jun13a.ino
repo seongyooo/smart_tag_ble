@@ -103,21 +103,20 @@ static void saveState() {
 
 // ─────────────────────────────────────────────────────
 // Type 0x01 Advertising 업데이트
-// [CompID 2B][0x01][TagID][LastSeq][Rsvd] = 6B
+// [CompID 2B][0x01][TagID][LastSeq] = 5B
 // ─────────────────────────────────────────────────────
 static void updateAdvertising() {
-    uint8_t mfg[6];
+    uint8_t mfg[5];
     mfg[0] = 0xFF;  mfg[1] = 0xFF;  // Company ID LE
     mfg[2] = 0x01;                   // Type
     mfg[3] = g_tagId;
     mfg[4] = g_lastSeq;
-    mfg[5] = 0x00;  // Reserved
 
     NimBLEAdvertising* pAdv = NimBLEDevice::getAdvertising();
     pAdv->stop();
 
     NimBLEAdvertisementData advData;
-    advData.setManufacturerData(std::string((char*)mfg, 6));
+    advData.setManufacturerData(std::string((char*)mfg, 5));
     pAdv->setAdvertisementData(advData);
 
     pAdv->start(0);
