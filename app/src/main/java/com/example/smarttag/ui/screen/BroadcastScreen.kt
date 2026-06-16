@@ -267,17 +267,17 @@ fun BroadcastScreen(
 @Composable
 private fun TestDatasetSummary() {
     val rows = listOf(
-        // tagId, priceA, eventA, priceB, eventB
-        listOf("Tag", "세트 A", "", "세트 B", ""),
-        listOf("1", "1,100원", "-",    "5,000원",  "SALE 6/1~30"),
-        listOf("2", "1,500원", "1+1 6/1~30", "8,900원", "-"),
-        listOf("3", "2,000원", "-",    "12,000원", "1+1 6/20~30"),
-        listOf("4", "980원",   "SALE 6/15~20", "3,500원", "2+1"),
-        listOf("5", "3,200원", "2+1 6/1~15",  "15,000원", "-"),
-        listOf("6", "500원",   "-",    "2,200원",  "1+1 6/1~15"),
-        listOf("7", "1,800원", "1+1",  "9,800원",  "SALE 6/15~20"),
-        listOf("8", "4,500원", "-",    "22,000원", "-"),
-        listOf("9", "780원",   "SALE 6/10~25", "4,400원", "2+1 6/1~30"),
+        // tagId, "이름 / 가격 / 이벤트(날짜)" for A and B
+        listOf("Tag", "세트 A", "세트 B"),
+        listOf("1", "Shin Ramen\n1,100원",            "Beef Bulgogi\n5,000원 SALE 6/1~30"),
+        listOf("2", "Jin Ramen\n1,500원 1+1 6/1~30", "Jeju Pork\n8,900원"),
+        listOf("3", "Samdasoo 2L\n2,000원",           "Wild Flatfish\n12,000원 1+1 6/20~30"),
+        listOf("4", "Shrimp Snack\n980원 SALE 6/15~20", "Organic Apple\n3,500원 2+1"),
+        listOf("5", "Cantata Coffee\n3,200원 2+1 6/1~15", "Shine Muscat\n15,000원"),
+        listOf("6", "Gum\n500원",                     "Premium Milk\n2,200원 1+1 6/1~15"),
+        listOf("7", "Pepero\n1,800원 1+1",            "Imported Cheese\n9,800원 SALE 6/15~20"),
+        listOf("8", "Ottogi Rice\n4,500원",            "Sesame Oil Set\n22,000원"),
+        listOf("9", "Pocari Sweat\n780원 SALE 6/10~25", "Mentaiko\n4,400원 2+1 6/1~30"),
     )
     Column(
         modifier = Modifier
@@ -290,40 +290,27 @@ private fun TestDatasetSummary() {
             Row(modifier = Modifier.fillMaxWidth()) {
                 Text(
                     row[0],
-                    modifier = Modifier.width(36.dp),
-                    style = if (isHeader) MaterialTheme.typography.labelSmall
-                            else MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.width(32.dp),
+                    style = MaterialTheme.typography.labelSmall,
                     fontWeight = if (isHeader) FontWeight.Bold else FontWeight.Normal,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        row[1],
-                        style = if (isHeader) MaterialTheme.typography.labelSmall
-                                else MaterialTheme.typography.bodySmall,
-                        fontWeight = if (isHeader) FontWeight.Bold else FontWeight.Normal,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    if (row[2].isNotEmpty()) Text(
-                        row[2],
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        row[3],
-                        style = if (isHeader) MaterialTheme.typography.labelSmall
-                                else MaterialTheme.typography.bodySmall,
-                        fontWeight = if (isHeader) FontWeight.Bold else FontWeight.Normal,
-                        color = MaterialTheme.colorScheme.secondary
-                    )
-                    if (row[4].isNotEmpty()) Text(
-                        row[4],
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                Text(
+                    row[1],
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = if (isHeader) FontWeight.Bold else FontWeight.Normal,
+                    color = if (isHeader) MaterialTheme.colorScheme.onSurfaceVariant
+                            else MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    row[2],
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = if (isHeader) FontWeight.Bold else FontWeight.Normal,
+                    color = if (isHeader) MaterialTheme.colorScheme.onSurfaceVariant
+                            else MaterialTheme.colorScheme.secondary
+                )
             }
             if (isHeader) HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
         }

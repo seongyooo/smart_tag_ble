@@ -540,7 +540,8 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
         val price: Int,
         val event: EventType,
         val startDate: LocalDate?,
-        val endDate: LocalDate?
+        val endDate: LocalDate?,
+        val name: String = ""
     )
 
     /**
@@ -550,26 +551,26 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
     fun applyTestDataset(label: String) {
         val presets: Map<Int, TestPreset> = when (label) {
             "A" -> mapOf(
-                1 to TestPreset(1100,  EventType.NONE,         null,                        null),
-                2 to TestPreset(1500,  EventType.ONE_PLUS_ONE, LocalDate.of(2000, 6,  1),  LocalDate.of(2000, 6, 30)),
-                3 to TestPreset(2000,  EventType.NONE,         null,                        null),
-                4 to TestPreset(980,   EventType.DISCOUNT,     LocalDate.of(2000, 6, 15),  LocalDate.of(2000, 6, 20)),
-                5 to TestPreset(3200,  EventType.TWO_PLUS_ONE, LocalDate.of(2000, 6,  1),  LocalDate.of(2000, 6, 15)),
-                6 to TestPreset(500,   EventType.NONE,         null,                        null),
-                7 to TestPreset(1800,  EventType.ONE_PLUS_ONE, null,                        null),
-                8 to TestPreset(4500,  EventType.NONE,         null,                        null),
-                9 to TestPreset(780,   EventType.DISCOUNT,     LocalDate.of(2000, 6, 10),  LocalDate.of(2000, 6, 25)),
+                1 to TestPreset(1100,  EventType.NONE,         null,                       null,                       "Shin Ramen"),
+                2 to TestPreset(1500,  EventType.ONE_PLUS_ONE, LocalDate.of(2000, 6,  1), LocalDate.of(2000, 6, 30), "Jin Ramen"),
+                3 to TestPreset(2000,  EventType.NONE,         null,                       null,                       "Samdasoo 2L"),
+                4 to TestPreset(980,   EventType.DISCOUNT,     LocalDate.of(2000, 6, 15), LocalDate.of(2000, 6, 20), "Shrimp Snack"),
+                5 to TestPreset(3200,  EventType.TWO_PLUS_ONE, LocalDate.of(2000, 6,  1), LocalDate.of(2000, 6, 15), "Cantata Coffee"),
+                6 to TestPreset(500,   EventType.NONE,         null,                       null,                       "Gum"),
+                7 to TestPreset(1800,  EventType.ONE_PLUS_ONE, null,                       null,                       "Pepero"),
+                8 to TestPreset(4500,  EventType.NONE,         null,                       null,                       "Ottogi Rice"),
+                9 to TestPreset(780,   EventType.DISCOUNT,     LocalDate.of(2000, 6, 10), LocalDate.of(2000, 6, 25), "Pocari Sweat"),
             )
             "B" -> mapOf(
-                1 to TestPreset(5000,  EventType.DISCOUNT,     LocalDate.of(2000, 6,  1),  LocalDate.of(2000, 6, 30)),
-                2 to TestPreset(8900,  EventType.NONE,         null,                        null),
-                3 to TestPreset(12000, EventType.ONE_PLUS_ONE, LocalDate.of(2000, 6, 20),  LocalDate.of(2000, 6, 30)),
-                4 to TestPreset(3500,  EventType.TWO_PLUS_ONE, null,                        null),
-                5 to TestPreset(15000, EventType.NONE,         null,                        null),
-                6 to TestPreset(2200,  EventType.ONE_PLUS_ONE, LocalDate.of(2000, 6,  1),  LocalDate.of(2000, 6, 15)),
-                7 to TestPreset(9800,  EventType.DISCOUNT,     LocalDate.of(2000, 6, 15),  LocalDate.of(2000, 6, 20)),
-                8 to TestPreset(22000, EventType.NONE,         null,                        null),
-                9 to TestPreset(4400,  EventType.TWO_PLUS_ONE, LocalDate.of(2000, 6,  1),  LocalDate.of(2000, 6, 30)),
+                1 to TestPreset(5000,  EventType.DISCOUNT,     LocalDate.of(2000, 6,  1), LocalDate.of(2000, 6, 30), "Beef Bulgogi"),
+                2 to TestPreset(8900,  EventType.NONE,         null,                       null,                       "Jeju Pork"),
+                3 to TestPreset(12000, EventType.ONE_PLUS_ONE, LocalDate.of(2000, 6, 20), LocalDate.of(2000, 6, 30), "Wild Flatfish"),
+                4 to TestPreset(3500,  EventType.TWO_PLUS_ONE, null,                       null,                       "Organic Apple"),
+                5 to TestPreset(15000, EventType.NONE,         null,                       null,                       "Shine Muscat"),
+                6 to TestPreset(2200,  EventType.ONE_PLUS_ONE, LocalDate.of(2000, 6,  1), LocalDate.of(2000, 6, 15), "Premium Milk"),
+                7 to TestPreset(9800,  EventType.DISCOUNT,     LocalDate.of(2000, 6, 15), LocalDate.of(2000, 6, 20), "Imported Cheese"),
+                8 to TestPreset(22000, EventType.NONE,         null,                       null,                       "Sesame Oil Set"),
+                9 to TestPreset(4400,  EventType.TWO_PLUS_ONE, LocalDate.of(2000, 6,  1), LocalDate.of(2000, 6, 30), "Mentaiko"),
             )
             else -> emptyMap()
         }
@@ -578,6 +579,9 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
             for ((tagId, preset) in presets) {
                 val tag = dao.getTagById(tagId) ?: continue
                 dao.setTargetState(tag.deviceAddress, preset.price, preset.event, preset.startDate, preset.endDate)
+                if (preset.name.isNotEmpty()) {
+                    dao.setTargetName(tag.deviceAddress, preset.name)
+                }
                 applied++
             }
             _snackbarMessage.value = "테스트 세트 $label 적용 완료 ($applied/${presets.size}개 태그)"
