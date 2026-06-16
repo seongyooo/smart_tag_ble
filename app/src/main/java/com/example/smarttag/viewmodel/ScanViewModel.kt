@@ -1,6 +1,7 @@
 package com.example.smarttag.viewmodel
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.smarttag.ble.BleEvent
@@ -21,15 +22,15 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 
+private const val LTAG = "ScanVM_ACK"
+
 // ── 브로드캐스트 큐 상태 ──────────────────────────────────────────
 sealed class BroadcastQueueState {
     object Idle : BroadcastQueueState()
-    data class Running(val groupId: Int, val pendingCount: Int) : BroadcastQueueState()
-    data class Done(val groupId: Int) : BroadcastQueueState()
+    data class Running(val pendingCount: Int) : BroadcastQueueState()
+    object Done : BroadcastQueueState()
 }
 
-private const val RSSI_THRESHOLD = -75          // dBm 이상만 "근거리"로 판정
-private const val REBROADCAST_COOLDOWN_MS = 5000L  // 동일 TagID 재전송 금지 시간
 
 class ScanViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -66,8 +67,8 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
     private val seqMap = mutableMapOf<Int, List<Int>>()    // seq → [tagId, ...]
     private val nameSeq = mutableMapOf<Int, Int>()          // tagId → 마지막 단편 Seq
 
-    // ── Walk-by 중복 전송 방지 ───────────────────────────────────
-    private val lastBroadcastTime = mutableMapOf<Int, Long>()
+    // ── 브로드캐스트 오프셋 (순환 전송용) ────────────────────────
+    private var broadcastOffset = 0
 
     // ── 브로드캐스트 루프 Job ─────────────────────────────────────
     private var broadcastLoopJob: Job? = null
@@ -156,7 +157,7 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
     private fun updateZone() {
         val visible = _mergedTags.value
         val score = visible
-            .filter { it.groupId > 0 && it.rssi >= RSSI_THRESHOLD }
+            .filter { it.groupId > 0 && it.rssi >= -75 }
             .groupBy { it.groupId }
             .mapValues { (_, tags) -> tags.sumOf { (it.rssi + 100).coerceAtLeast(0) } }
 
@@ -178,17 +179,64 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
                         val lastSeq = event.data.lastSeq
                         viewModelScope.launch {
                             val existing = dao.getTagByAddress(event.address)
-                            if (existing != null) {
-                                // tagId가 미설정(0)인 경우에만 0x01 기준으로 채움
-                                // GATT로 한 번 설정된 값(>0)은 0x01이 덮어쓰지 않음
-                                if (existing.tagId == 0 && tagId > 0) {
-                                    dao.setTagId(event.address, tagId)
+                            if (existing == null) {
+                                Log.d(LTAG, "[0x01] addr=${event.address} → DB에 없음 (existing=null)")
+                                return@launch
+                            }
+
+                            // tagId가 미설정(0)인 경우에만 0x01 기준으로 채움
+                            if (existing.tagId == 0 && tagId > 0) {
+                                dao.setTagId(event.address, tagId)
+                            }
+                            val effectiveTagId = if (existing.tagId > 0) existing.tagId else tagId
+                            dao.updateCurrentState(effectiveTagId, event.data.price, lastSeq)
+
+                            Log.d(LTAG, "[0x01] addr=${event.address} " +
+                                "rxTagId=$tagId effectiveTagId=$effectiveTagId lastSeq=$lastSeq " +
+                                "rxPrice=${event.data.price} rxEvent=${event.data.event} " +
+                                "status=${existing.status} targetPrice=${existing.targetPrice} " +
+                                "targetEvent=${existing.targetEvent} seqMap=$seqMap")
+
+                            if (existing.status != TagStatus.PENDING) return@launch
+
+                            val label = existing.productName.ifBlank { "Tag $effectiveTagId" }
+
+                            // 1순위: Seq 기반 ACK — 앱이 보낸 seq를 ESP32가 0x01로 에코
+                            if (lastSeq > 0) {
+                                val priceTagIds = seqMap[lastSeq]
+                                if (priceTagIds != null && effectiveTagId in priceTagIds) {
+                                    val remaining = priceTagIds.filterNot { it == effectiveTagId }
+                                    if (remaining.isEmpty()) seqMap.remove(lastSeq)
+                                    else seqMap[lastSeq] = remaining
+                                    dao.updateStatusByAddress(event.address, TagStatus.UPDATED)
+                                    Log.d(LTAG, "→ Seq ACK 완료 (seq=$lastSeq, tagId=$effectiveTagId)")
+                                    _snackbarMessage.value = "$label 동기화 완료"
+                                    return@launch
                                 }
-                                val effectiveTagId = if (existing.tagId > 0) existing.tagId else tagId
-                                dao.updateCurrentState(effectiveTagId, event.data.price, lastSeq)
+                                // 이름 업데이트 Seq 확인
+                                if (nameSeq[effectiveTagId] == lastSeq) {
+                                    nameSeq.remove(effectiveTagId)
+                                    dao.updateStatusByAddress(event.address, TagStatus.UPDATED)
+                                    Log.d(LTAG, "→ Name Seq ACK 완료 (seq=$lastSeq)")
+                                    return@launch
+                                }
+                            }
+
+                            // 2순위: Price+Event 값 비교 (폴백 — Seq 미일치 시)
+                            // 가격은 10원 단위로 비교 (0x02 전송 시 /10 절삭)
+                            if (existing.targetPrice > 0 &&
+                                event.data.price / 10 == existing.targetPrice / 10 &&
+                                event.data.event == existing.targetEvent) {
+                                dao.updateStatusByAddress(event.address, TagStatus.UPDATED)
+                                Log.d(LTAG, "→ Price+Event ACK 완료 (폴백)")
+                                _snackbarMessage.value = "$label 동기화 완료"
+                            } else {
+                                Log.d(LTAG, "→ ACK 미충족: " +
+                                    "seqCheck=($lastSeq in seqMap=${seqMap.keys}) " +
+                                    "priceMatch=${event.data.price/10}==${existing.targetPrice/10} " +
+                                    "eventMatch=${event.data.event}==${existing.targetEvent}")
                             }
                         }
-                        onTag01Received(tagId, lastSeq, event.rssi)
                     }
                     is BleEvent.AckReceived -> {
                         viewModelScope.launch {
@@ -200,11 +248,16 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
                     is BleEvent.ConfigWriteSuccess -> {
                         bleManager.updateTagIdInDiscovered(event.address, event.tagId)
                         viewModelScope.launch {
-                            val scanned = bleManager.discoveredTags.value[event.address]
-                            if (scanned != null) {
-                                dao.upsert(scanned.copy(tagId = event.tagId).toEntity())
-                            } else {
+                            val existing = dao.getTagByAddress(event.address)
+                            if (existing != null) {
+                                // 기존 행이 있으면 tagId 컬럼만 수정 — currentPrice·targetPrice 등 보존
                                 dao.setTagId(event.address, event.tagId)
+                            } else {
+                                // 처음 보는 태그: 스캔 데이터로 전체 삽입
+                                val scanned = bleManager.discoveredTags.value[event.address]
+                                if (scanned != null) {
+                                    dao.upsert(scanned.copy(tagId = event.tagId).toEntity())
+                                }
                             }
                         }
                         _snackbarMessage.value = "설정 완료 → Tag ID: ${event.tagId}"
@@ -218,81 +271,6 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
                     else -> {}
                 }
             }
-        }
-    }
-
-    /**
-     * Seq 기반 ACK 확인 (suspend — DB 쓰기 완료 후 반환)
-     * seqMap[lastSeq]에 tagId 포함 → 가격 업데이트 완료
-     * nameSeq[tagId] == lastSeq   → 이름 업데이트 완료
-     * @return true이면 ACK 처리 완료 (재전송 불필요)
-     */
-    private suspend fun processSeqAck(tagId: Int, lastSeq: Int): Boolean {
-        if (lastSeq == 0) return false
-
-        val priceTagIds = seqMap[lastSeq]
-        if (priceTagIds != null && tagId in priceTagIds) {
-            seqMap.remove(lastSeq)
-            dao.updateStatusById(tagId, TagStatus.UPDATED)
-            val label = dao.getTagById(tagId)?.productName?.ifBlank { "Tag $tagId" } ?: "Tag $tagId"
-            _snackbarMessage.value = "$label 동기화 완료"
-            return true
-        }
-
-        if (nameSeq[tagId] == lastSeq) {
-            nameSeq.remove(tagId)
-            dao.updateStatusById(tagId, TagStatus.UPDATED)
-            return true
-        }
-
-        return false
-    }
-
-    /**
-     * 0x01 수신 처리: ACK 확인 + Walk-by 자동 브로드캐스트 트리거
-     *
-     * ACK 처리와 Walk-by 재전송 판단을 단일 coroutine 안에서 순차 실행하여
-     * "ACK DB 쓰기"와 "Walk-by DB 읽기"의 경쟁 조건을 방지
-     */
-    private fun onTag01Received(tagId: Int, lastSeq: Int, rssi: Int) {
-        if (rssi < RSSI_THRESHOLD) {
-            // 원거리 태그: Walk-by는 생략하지만 ACK는 처리
-            viewModelScope.launch { processSeqAck(tagId, lastSeq) }
-            return
-        }
-
-        val now = System.currentTimeMillis()
-        val lastSent = lastBroadcastTime[tagId] ?: 0L
-        if (now - lastSent < REBROADCAST_COOLDOWN_MS) {
-            // 쿨다운 중: Walk-by는 생략하지만 ACK는 처리
-            viewModelScope.launch { processSeqAck(tagId, lastSeq) }
-            return
-        }
-
-        lastBroadcastTime[tagId] = now
-
-        viewModelScope.launch {
-            // ACK 처리를 먼저 완료한 뒤 DB 상태 확인 → 경쟁 조건 제거
-            val acked = processSeqAck(tagId, lastSeq)
-            if (acked) return@launch  // ACK 완료 → 재전송 불필요
-
-            val tag = dao.getTagById(tagId) ?: return@launch
-            if (tag.status != TagStatus.PENDING) return@launch
-            if (tag.targetPrice == 0) return@launch  // 목표 가격 미설정 → 브로드캐스트 생략
-
-            // PENDING 태그가 근처에 있으면 자동 브로드캐스트
-            val seq = allocSeqs(1)
-            val entry = PriceEntry(
-                tagId = tag.tagId,
-                price = tag.targetPrice,
-                event = tag.targetEvent,
-                startDate = tag.targetStartDate,
-                endDate = tag.targetEndDate
-            )
-            seqMap[seq] = listOf(tagId)
-            bleManager.broadcastPriceUpdate(seq, listOf(entry))
-            val label = tag.productName.ifBlank { "Tag $tagId" }
-            _snackbarMessage.value = "$label 자동 업데이트 중..."
         }
     }
 
@@ -344,29 +322,28 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 그룹 일괄 업데이트 (브로드캐스트 루프)
+     * 전체 PENDING 태그 일괄 브로드캐스트 루프
      *
-     * 각 태그에 미리 설정된 개별 targetPrice/Event/Date를 그대로 사용.
-     * PriceUpdateScreen처럼 동일 가격을 설정한 뒤 전송하려면 applyGroupPriceAndBroadcast를 사용.
+     * 카테고리 무관하게 DB의 모든 PENDING 태그를 대상으로 순차 전송.
+     * 각 태그에 미리 설정된 개별 targetPrice/Event/Date를 사용.
      */
-    fun startGroupBroadcast(groupId: Int, maxRetries: Int = 15) {
+    fun startBroadcast(maxRetries: Int = 15) {
         broadcastLoopJob?.cancel()
+        broadcastOffset = 0
         broadcastLoopJob = viewModelScope.launch {
-            runGroupBroadcastLoop(groupId, maxRetries)
+            runBroadcastLoop(maxRetries)
         }
     }
 
-    private suspend fun runGroupBroadcastLoop(groupId: Int, maxRetries: Int = 15) {
+    private suspend fun runBroadcastLoop(maxRetries: Int = 15) {
         var retries = 0
         while (retries < maxRetries) {
-            val pending = dao.getPendingTagsByGroup(groupId)
+            val pending = dao.getAllPendingTags()
             if (pending.isEmpty()) {
-                _broadcastQueueState.value = BroadcastQueueState.Done(groupId)
-                _snackbarMessage.value = "${getCategoryName(groupId)} 전체 업데이트 완료!"
+                _broadcastQueueState.value = BroadcastQueueState.Done
+                _snackbarMessage.value = "전체 태그 업데이트 완료!"
                 return
             }
-
-            _broadcastQueueState.value = BroadcastQueueState.Running(groupId, pending.size)
 
             // targetPrice=0 태그는 설정 미완료 → 브로드캐스트에서 제외
             val readyTags = pending.filter { it.targetPrice > 0 }
@@ -376,22 +353,37 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
                 return
             }
 
-            val entries = readyTags.take(3).map { tag ->
+            _broadcastQueueState.value = BroadcastQueueState.Running(readyTags.size)
+
+            // 순환 오프셋으로 매 iteration마다 다른 3개 선택 → ACK 실패해도 다음 태그로 진행
+            val startIdx = broadcastOffset % readyTags.size
+            val entries = (0 until minOf(3, readyTags.size)).map { i ->
+                val tag = readyTags[(startIdx + i) % readyTags.size]
                 PriceEntry(tag.tagId, tag.targetPrice, tag.targetEvent, tag.targetStartDate, tag.targetEndDate)
             }
+            broadcastOffset += 3
+            Log.d(LTAG, "[broadcast] seq=${nextSeq} entries=${entries.joinToString { "tagId=${it.tagId} price=${it.price} event=${it.event}" }}")
             val seq = allocSeqs(1)
             seqMap[seq] = entries.map { it.tagId }
+            // 브로드캐스트 중 스캔 간섭 방지: 광고 전 스캔 중지
+            bleManager.stopScan()
             bleManager.broadcastPriceUpdate(seq, entries, 5000L)
 
-            delay(7000L)
+            // 5s 광고 종료까지 대기 + ESP32가 0x01 갱신할 시간 확보
+            delay(5500L)
+
+            // 스캔 재시작 → Android BLE 캐시 초기화, 업데이트된 0x01 수신
+            bleManager.startScan()
+            delay(3000L)  // 새 0x01 수신 후 ACK 처리 대기
+
             retries++
         }
 
-        dao.getPendingTagsByGroup(groupId).forEach { tag ->
+        dao.getAllPendingTags().forEach { tag ->
             dao.updateStatusByAddress(tag.deviceAddress, TagStatus.FAILED)
         }
         _broadcastQueueState.value = BroadcastQueueState.Idle
-        _snackbarMessage.value = "${getCategoryName(groupId)}: 일부 태그 업데이트 실패 (재시도 초과)"
+        _snackbarMessage.value = "일부 태그 업데이트 실패 (재시도 초과)"
     }
 
     /**

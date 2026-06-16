@@ -26,7 +26,6 @@ fun BroadcastScreen(
     viewModel: ScanViewModel,
     onBack: () -> Unit
 ) {
-    var groupIdInput by remember { mutableStateOf("1") }
     var tagIdInput by remember { mutableStateOf("2") }
     var priceInput by remember { mutableStateOf("") }   // 직접 전송 모드에서만 사용
     var isBroadcasting by remember { mutableStateOf(false) }
@@ -77,7 +76,7 @@ fun BroadcastScreen(
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         RadioButton(selected = !directMode, onClick = { directMode = false })
-                        Text("그룹 PENDING 태그 전송 (DB 조회)", modifier = Modifier.padding(start = 4.dp))
+                        Text("전체 PENDING 태그 전송 (DB 조회)", modifier = Modifier.padding(start = 4.dp))
                     }
                 }
             }
@@ -106,21 +105,17 @@ fun BroadcastScreen(
                             suffix = { Text("원") }
                         )
                     } else {
-                        OutlinedTextField(
-                            value = groupIdInput,
-                            onValueChange = { groupIdInput = it.filter { c -> c.isDigit() } },
-                            label = { Text("Group ID") },
-                            modifier = Modifier.fillMaxWidth(),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            singleLine = true,
-                            supportingText = { Text("해당 그룹 내 태그들의 개별 설정 가격/이벤트로 전송됨") }
+                        Text(
+                            "DB에 저장된 모든 PENDING 태그를 카테고리 무관하게 순차 전송합니다.\n" +
+                            "각 태그의 태그 상세 화면에서 설정한 가격/이벤트가 사용됩니다.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
             }
 
             // BLE 패킷 미리보기 (직접 전송 모드에서만)
-            val groupId = groupIdInput.toIntOrNull() ?: 1
             val tagId = tagIdInput.toIntOrNull() ?: 2
             val price = priceInput.toIntOrNull() ?: 0
             if (directMode && priceInput.isNotBlank()) {
@@ -131,7 +126,7 @@ fun BroadcastScreen(
 
             // 전송 버튼
             val canBroadcast = if (directMode) priceInput.isNotBlank() && tagIdInput.isNotBlank()
-                               else groupIdInput.isNotBlank()
+                               else true
             Button(
                 onClick = {
                     if (isBroadcasting) {
@@ -141,7 +136,7 @@ fun BroadcastScreen(
                         if (directMode) {
                             viewModel.broadcastDirect(tagId, price)
                         } else {
-                            viewModel.startGroupBroadcast(groupId)
+                            viewModel.startBroadcast()
                         }
                         isBroadcasting = true
                     }
@@ -181,7 +176,7 @@ fun BroadcastScreen(
                             if (directMode)
                                 "Tag $tagId → ${"%,d원".format(price)} Advertising 중... 5초 후 자동 중지"
                             else
-                                "Group $groupId PENDING 태그 순차 전송 중...",
+                                "전체 PENDING 태그 순차 전송 중...",
                             style = MaterialTheme.typography.bodyMedium
                         )
                     }
@@ -209,14 +204,14 @@ fun BroadcastScreen(
                                 color = MaterialTheme.colorScheme.onTertiaryContainer)
                         }
                     }
-                    is BroadcastQueueState.Done -> Card(
+                    BroadcastQueueState.Done -> Card(
                         colors = CardDefaults.cardColors(
                             containerColor = MaterialTheme.colorScheme.secondaryContainer
                         ),
                         shape = RoundedCornerShape(8.dp)
                     ) {
                         Text(
-                            "Group ${qs.groupId} 전체 업데이트 완료!",
+                            "전체 태그 업데이트 완료!",
                             modifier = Modifier.padding(12.dp),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSecondaryContainer

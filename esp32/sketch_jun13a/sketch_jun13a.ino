@@ -29,6 +29,10 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 #define COMPANY_ID   0xFFFF
 
+// 이름 단편 조립 상수 (g_name 배열 크기 계산에 사용)
+#define MAX_FRAGS  4
+#define FRAG_SIZE 18
+
 // ─────────────────────────────────────────────────────
 // BLE UUIDs
 // ─────────────────────────────────────────────────────
@@ -52,7 +56,7 @@ static uint32_t g_price  = 0;
 static uint8_t  g_event  = 0;   // 0=없음 1=1+1 2=2+1 3=할인
 static uint8_t  g_startM = 0, g_startD = 0;
 static uint8_t  g_endM   = 0, g_endD   = 0;
-static char     g_name[64] = "";
+static char     g_name[MAX_FRAGS * FRAG_SIZE + 1] = "";  // 73B (MAX_FRAGS×FRAG_SIZE 오버플로우 방지)
 
 static NimBLECharacteristic* pAckChar = nullptr;
 static Preferences prefs;
@@ -61,8 +65,6 @@ static volatile bool needUpdate = false;  // loop()에서 OLED+Adv 갱신 트리
 // ─────────────────────────────────────────────────────
 // 이름 단편 조립 버퍼
 // ─────────────────────────────────────────────────────
-#define MAX_FRAGS  4
-#define FRAG_SIZE 18
 static uint8_t nameFrag[MAX_FRAGS][FRAG_SIZE];
 static bool    fragRcvd[MAX_FRAGS] = {};
 static int     lastFragIdx = -1;

@@ -159,7 +159,7 @@ private fun OperationTab(
         // 브로드캐스트 큐 진행
         if (queueState is BroadcastQueueState.Running) {
             item {
-                QueueProgressCard(queueState as BroadcastQueueState.Running, categories)
+                QueueProgressCard(queueState as BroadcastQueueState.Running)
             }
         }
 
@@ -284,8 +284,7 @@ private fun CategoryChipRow(
 }
 
 @Composable
-private fun QueueProgressCard(state: BroadcastQueueState.Running, categories: List<CategoryEntity>) {
-    val name = categories.firstOrNull { it.groupId == state.groupId }?.name ?: "Group ${state.groupId}"
+private fun QueueProgressCard(state: BroadcastQueueState.Running) {
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
         shape = RoundedCornerShape(12.dp)
@@ -298,7 +297,7 @@ private fun QueueProgressCard(state: BroadcastQueueState.Running, categories: Li
             CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp,
                 color = MaterialTheme.colorScheme.onTertiaryContainer)
             Column {
-                Text("$name 업데이트 진행 중",
+                Text("전체 태그 업데이트 진행 중",
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onTertiaryContainer)

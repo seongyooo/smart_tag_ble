@@ -30,37 +30,31 @@ fun PriceUpdateScreen(
     viewModel: ScanViewModel,
     onBack: () -> Unit
 ) {
-    val categories     by viewModel.categories.collectAsState()
-    val allTags        by viewModel.mergedTags.collectAsState()
-    val currentGroupId by viewModel.currentGroupId.collectAsState()
-    val queueState     by viewModel.broadcastQueueState.collectAsState()
-    val snackbar       by viewModel.snackbarMessage.collectAsState()
+    val categories  by viewModel.categories.collectAsState()
+    val allTags     by viewModel.mergedTags.collectAsState()
+    val queueState  by viewModel.broadcastQueueState.collectAsState()
+    val snackbar    by viewModel.snackbarMessage.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(snackbar) {
         snackbar?.let { snackbarHostState.showSnackbar(it); viewModel.clearSnackbar() }
     }
 
-    // ── 선택된 그룹 ─────────────────────────────────────────────────
-    var selectedGroupId by remember {
-        mutableStateOf(initialGroupId ?: currentGroupId ?: 0)
-    }
-    LaunchedEffect(currentGroupId) {
-        if (selectedGroupId == 0 && currentGroupId != null) {
-            selectedGroupId = currentGroupId!!
-        }
-    }
-
+    // ── 카테고리 필터 (표시 전용 — 브로드캐스트와 무관) ─────────────
+    // 0 = 전체 보기
+    var filterGroupId by remember { mutableStateOf(initialGroupId ?: 0) }
     var categoryExpanded by remember { mutableStateOf(false) }
 
-    val groupTags = if (selectedGroupId > 0) allTags.filter { it.groupId == selectedGroupId } else emptyList()
-    val pendingTags = groupTags.filter { it.status != TagStatus.UPDATED }
-    val selectedCategoryName = categories.firstOrNull { it.groupId == selectedGroupId }?.name
+    val allPendingTags = allTags.filter { it.status != TagStatus.UPDATED && it.targetPrice > 0 }
+    val displayTags = if (filterGroupId > 0)
+        allTags.filter { it.groupId == filterGroupId }
+    else
+        allTags
 
-    val isRunning = queueState is BroadcastQueueState.Running &&
-        (queueState as BroadcastQueueState.Running).groupId == selectedGroupId
+    val isRunning = queueState is BroadcastQueueState.Running
+    val canBroadcast = allPendingTags.isNotEmpty() && !isRunning
 
-    val canBroadcast = selectedGroupId > 0 && pendingTags.isNotEmpty() && !isRunning
+    val filterCategoryName = categories.firstOrNull { it.groupId == filterGroupId }?.name
 
     Scaffold(
         topBar = {
@@ -69,11 +63,12 @@ fun PriceUpdateScreen(
                     Column {
                         Text("가격 브로드캐스트", style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold)
-                        if (selectedCategoryName != null) {
-                            Text(selectedCategoryName,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f))
-                        }
+                        Text(
+                            if (isRunning) "전송 중..."
+                            else "전체 PENDING: ${allPendingTags.size}개",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                        )
                     }
                 },
                 navigationIcon = {
@@ -102,98 +97,24 @@ fun PriceUpdateScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
 
-            // ── 카테고리 선택 ─────────────────────────────────────────
+            // ── 브로드캐스트 시작 버튼 ────────────────────────────────
             item {
-                Card(shape = RoundedCornerShape(12.dp)) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(Icons.Default.LocationOn,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(18.dp))
-                            Text("카테고리 (매대)", style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold)
-                            if (currentGroupId != null && currentGroupId == selectedGroupId) {
-                                Spacer(Modifier.weight(1f))
-                                SuggestionChip(
-                                    onClick = {},
-                                    label = { Text("자동 감지", fontSize = 11.sp) },
-                                    icon = {
-                                        Icon(Icons.Default.MyLocation,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(12.dp))
-                                    }
-                                )
-                            }
-                        }
-
-                        if (categories.isEmpty()) {
-                            Text("카테고리가 없습니다. 홈 화면 설정에서 추가하세요.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error)
-                        } else {
-                            ExposedDropdownMenuBox(
-                                expanded = categoryExpanded,
-                                onExpandedChange = { categoryExpanded = it }
-                            ) {
-                                OutlinedTextField(
-                                    value = if (selectedGroupId > 0)
-                                        "${selectedCategoryName ?: "Group $selectedGroupId"} (Group $selectedGroupId)"
-                                    else "카테고리를 선택하세요",
-                                    onValueChange = {},
-                                    readOnly = true,
-                                    modifier = Modifier.fillMaxWidth()
-                                        .menuAnchor(MenuAnchorType.PrimaryNotEditable),
-                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = categoryExpanded) },
-                                    colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
-                                    isError = selectedGroupId == 0
-                                )
-                                ExposedDropdownMenu(
-                                    expanded = categoryExpanded,
-                                    onDismissRequest = { categoryExpanded = false }
-                                ) {
-                                    categories.forEach { cat ->
-                                        val count = allTags.count { it.groupId == cat.groupId }
-                                        val pending = allTags.count { it.groupId == cat.groupId && it.status != TagStatus.UPDATED }
-                                        DropdownMenuItem(
-                                            text = {
-                                                Row(
-                                                    modifier = Modifier.fillMaxWidth(),
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    horizontalArrangement = Arrangement.SpaceBetween
-                                                ) {
-                                                    Text(cat.name)
-                                                    Text(
-                                                        "Group ${cat.groupId}  •  ${count}개" +
-                                                            if (pending > 0) "  (대기 $pending)" else "",
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        color = if (pending > 0)
-                                                            MaterialTheme.colorScheme.primary
-                                                        else
-                                                            MaterialTheme.colorScheme.onSurfaceVariant
-                                                    )
-                                                }
-                                            },
-                                            onClick = {
-                                                selectedGroupId = cat.groupId
-                                                categoryExpanded = false
-                                            },
-                                            leadingIcon = if (selectedGroupId == cat.groupId) {{
-                                                Icon(Icons.Default.Check, contentDescription = null,
-                                                    modifier = Modifier.size(16.dp))
-                                            }} else null
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
+                Button(
+                    onClick = { viewModel.startBroadcast() },
+                    enabled = canBroadcast,
+                    modifier = Modifier.fillMaxWidth().height(52.dp)
+                ) {
+                    Icon(Icons.Default.Campaign, contentDescription = null,
+                        modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        when {
+                            isRunning            -> "브로드캐스트 진행 중..."
+                            allPendingTags.isEmpty() -> "모든 태그가 최신 상태입니다"
+                            else -> "전체 PENDING ${allPendingTags.size}개 브로드캐스트"
+                        },
+                        style = MaterialTheme.typography.bodyLarge
+                    )
                 }
             }
 
@@ -230,61 +151,145 @@ fun PriceUpdateScreen(
                 }
             }
 
-            // ── 브로드캐스트 시작 버튼 ────────────────────────────────
+            // ── 안내 문구 ─────────────────────────────────────────────
             item {
-                Button(
-                    onClick = { viewModel.startGroupBroadcast(selectedGroupId) },
-                    enabled = canBroadcast,
-                    modifier = Modifier.fillMaxWidth().height(52.dp)
+                Card(
+                    shape = RoundedCornerShape(8.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
                 ) {
-                    Icon(Icons.Default.Campaign, contentDescription = null,
-                        modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(8.dp))
                     Text(
-                        when {
-                            selectedGroupId == 0      -> "카테고리를 선택하세요"
-                            pendingTags.isEmpty()     -> "모든 태그가 최신 상태입니다"
-                            else -> "${selectedCategoryName ?: "Group $selectedGroupId"} PENDING ${pendingTags.size}개 브로드캐스트"
-                        },
-                        style = MaterialTheme.typography.bodyLarge
+                        "카테고리 무관하게 PENDING 상태인 모든 태그에 순차 전송합니다.\n" +
+                        "가격이 설정되지 않은 태그는 건너뜁니다.\n" +
+                        "개별 설정은 태그 상세 화면에서 변경하세요.",
+                        modifier = Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
 
-            // ── 안내 문구 ─────────────────────────────────────────────
-            if (selectedGroupId > 0 && groupTags.isNotEmpty()) {
-                item {
-                    Card(
-                        shape = RoundedCornerShape(8.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant
-                        )
+            // ── 카테고리 필터 (목록 표시 전용) ───────────────────────
+            item {
+                Card(shape = RoundedCornerShape(12.dp)) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Text(
-                            "각 태그에 개별 설정된 가격·이벤트로 순차 전송합니다.\n" +
-                            "태그 설정이 없으면 해당 태그는 건너뜁니다.\n" +
-                            "개별 설정은 태그 상세 화면에서 변경하세요.",
-                            modifier = Modifier.padding(12.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(Icons.Default.FilterList,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp))
+                            Text("목록 필터 (카테고리)",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.weight(1f))
+                            SuggestionChip(
+                                onClick = {},
+                                label = { Text("표시 전용", fontSize = 10.sp) }
+                            )
+                        }
+
+                        ExposedDropdownMenuBox(
+                            expanded = categoryExpanded,
+                            onExpandedChange = { categoryExpanded = it }
+                        ) {
+                            OutlinedTextField(
+                                value = if (filterGroupId > 0)
+                                    "${filterCategoryName ?: "Group $filterGroupId"}"
+                                else "전체 태그 보기",
+                                onValueChange = {},
+                                readOnly = true,
+                                modifier = Modifier.fillMaxWidth()
+                                    .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = categoryExpanded) },
+                                colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors()
+                            )
+                            ExposedDropdownMenu(
+                                expanded = categoryExpanded,
+                                onDismissRequest = { categoryExpanded = false }
+                            ) {
+                                // "전체" 옵션
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text("전체 태그 보기")
+                                            Text(
+                                                "${allTags.size}개",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    },
+                                    onClick = { filterGroupId = 0; categoryExpanded = false },
+                                    leadingIcon = if (filterGroupId == 0) {{
+                                        Icon(Icons.Default.Check, contentDescription = null,
+                                            modifier = Modifier.size(16.dp))
+                                    }} else null
+                                )
+                                HorizontalDivider()
+                                categories.forEach { cat ->
+                                    val count = allTags.count { it.groupId == cat.groupId }
+                                    val pending = allTags.count { it.groupId == cat.groupId && it.status != TagStatus.UPDATED }
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.SpaceBetween
+                                            ) {
+                                                Text(cat.name)
+                                                Text(
+                                                    "${count}개" + if (pending > 0) "  (대기 $pending)" else "",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = if (pending > 0)
+                                                        MaterialTheme.colorScheme.primary
+                                                    else
+                                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            filterGroupId = cat.groupId
+                                            categoryExpanded = false
+                                        },
+                                        leadingIcon = if (filterGroupId == cat.groupId) {{
+                                            Icon(Icons.Default.Check, contentDescription = null,
+                                                modifier = Modifier.size(16.dp))
+                                        }} else null
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
 
-            // ── 그룹 내 태그 목록 ─────────────────────────────────────
-            if (groupTags.isNotEmpty()) {
-                item {
-                    Text(
-                        "${selectedCategoryName ?: "Group $selectedGroupId"} 태그 (${groupTags.size}개)",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+            // ── 태그 목록 ─────────────────────────────────────────────
+            item {
+                val label = if (filterGroupId > 0)
+                    "${filterCategoryName ?: "Group $filterGroupId"} 태그 (${displayTags.size}개)"
+                else
+                    "전체 태그 (${displayTags.size}개)"
+                Text(label,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+
+            if (displayTags.isNotEmpty()) {
+                items(displayTags, key = { it.deviceAddress }) { tag ->
+                    TagBroadcastItem(tag, viewModel.getCategoryName(tag.groupId))
                 }
-                items(groupTags, key = { it.deviceAddress }) { tag ->
-                    TagBroadcastItem(tag)
-                }
-            } else if (selectedGroupId > 0) {
+            } else {
                 item {
                     Card(
                         shape = RoundedCornerShape(12.dp),
@@ -300,11 +305,8 @@ fun PriceUpdateScreen(
                             Icon(Icons.Default.SearchOff, contentDescription = null,
                                 modifier = Modifier.size(32.dp),
                                 tint = MaterialTheme.colorScheme.outline)
-                            Text("이 카테고리의 태그가 없습니다.",
+                            Text("표시할 태그가 없습니다.",
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.outline)
-                            Text("태그 상세 화면에서 카테고리를 지정하세요.",
-                                style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.outline)
                         }
                     }
@@ -315,7 +317,7 @@ fun PriceUpdateScreen(
 }
 
 @Composable
-private fun TagBroadcastItem(tag: SmartTag) {
+private fun TagBroadcastItem(tag: SmartTag, categoryName: String) {
     val (statusText, statusColor) = when (tag.status) {
         TagStatus.UPDATED -> "완료" to Color(0xFF4CAF50)
         TagStatus.PENDING -> "대기" to Color(0xFFFF9800)
@@ -331,14 +333,30 @@ private fun TagBroadcastItem(tag: SmartTag) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                tag.productName.ifBlank { "TAG-%03d".format(tag.tagId) },
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium
-            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    tag.productName.ifBlank { "TAG-%03d".format(tag.tagId) },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium
+                )
+                if (tag.groupId > 0) {
+                    Text(
+                        categoryName,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(MaterialTheme.colorScheme.surface)
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                    )
+                }
+            }
             if (tag.targetPrice > 0) {
                 val eventStr = when (tag.targetEvent) {
-                    EventType.NONE -> ""
+                    EventType.NONE         -> ""
                     EventType.ONE_PLUS_ONE -> "  1+1"
                     EventType.TWO_PLUS_ONE -> "  2+1"
                     EventType.DISCOUNT     -> "  할인"

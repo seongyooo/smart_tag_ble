@@ -11,8 +11,11 @@ import android.util.Log
 import com.example.smarttag.model.EventType
 import com.example.smarttag.model.SmartTag
 import com.example.smarttag.model.TagStatus
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -55,8 +58,8 @@ class BleManager(private val context: Context) {
     private val _discoveredTags = MutableStateFlow<Map<String, SmartTag>>(emptyMap())
     val discoveredTags: StateFlow<Map<String, SmartTag>> = _discoveredTags.asStateFlow()
 
-    private val _bleEvents = MutableStateFlow<BleEvent?>(null)
-    val bleEvents: StateFlow<BleEvent?> = _bleEvents.asStateFlow()
+    private val _bleEvents = MutableSharedFlow<BleEvent>(replay = 0, extraBufferCapacity = 64)
+    val bleEvents: SharedFlow<BleEvent> = _bleEvents.asSharedFlow()
 
     private var activeGatt: BluetoothGatt? = null
 
@@ -74,7 +77,7 @@ class BleManager(private val context: Context) {
             if (mfgData != null && mfgData[0].toInt() and 0xFF == 0x01) {
                 val parsed = BlePackets.parseType01(mfgData)
                 if (parsed != null) {
-                    _bleEvents.value = BleEvent.TagInfoReceived(device.address, result.rssi, parsed)
+                    _bleEvents.tryEmit(BleEvent.TagInfoReceived(device.address, result.rssi, parsed))
                     updateDiscoveredTag(device, result.rssi, parsed.tagId)
                 }
                 return
@@ -160,7 +163,7 @@ class BleManager(private val context: Context) {
 
     fun connectAndWrite(address: String, price: Int) {
         val device = bluetoothAdapter?.getRemoteDevice(address) ?: run {
-            _bleEvents.value = BleEvent.Error(address, "디바이스를 찾을 수 없음")
+            _bleEvents.tryEmit(BleEvent.Error(address, "디바이스를 찾을 수 없음"))
             return
         }
         activeGatt?.close()
@@ -178,14 +181,14 @@ class BleManager(private val context: Context) {
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     Log.d(TAG, "Disconnected from $address")
                     gatt.close()
-                    _bleEvents.value = BleEvent.Disconnected
+                    _bleEvents.tryEmit(BleEvent.Disconnected)
                 }
             }
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                _bleEvents.value = BleEvent.Error(address, "서비스 검색 실패")
+                _bleEvents.tryEmit(BleEvent.Error(address, "서비스 검색 실패"))
                 gatt.disconnect()
                 return
             }
@@ -209,10 +212,10 @@ class BleManager(private val context: Context) {
 
         override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
-                _bleEvents.value = BleEvent.WriteSuccess(address)
+                _bleEvents.tryEmit(BleEvent.WriteSuccess(address))
                 Log.d(TAG, "Price written: $targetPrice")
             } else {
-                _bleEvents.value = BleEvent.Error(address, "쓰기 실패 (status=$status)")
+                _bleEvents.tryEmit(BleEvent.Error(address, "쓰기 실패 (status=$status)"))
                 gatt.disconnect()
             }
         }
@@ -230,7 +233,7 @@ class BleManager(private val context: Context) {
     private fun writePriceChar(gatt: BluetoothGatt, price: Int) {
         val char = gatt.getService(BleConstants.SERVICE_UUID)
             ?.getCharacteristic(BleConstants.PRICE_CHAR_UUID) ?: run {
-            _bleEvents.value = BleEvent.Error(gatt.device.address, "Price Characteristic 없음")
+            _bleEvents.tryEmit(BleEvent.Error(gatt.device.address, "Price Characteristic 없음"))
             gatt.disconnect()
             return
         }
@@ -247,7 +250,7 @@ class BleManager(private val context: Context) {
         val price = ByteBuffer.wrap(value, 3, 4).order(ByteOrder.LITTLE_ENDIAN).int
 
         Log.d(TAG, "ACK: Tag $tagId, Price $price")
-        _bleEvents.value = BleEvent.AckReceived(address, tagId, price)
+        _bleEvents.tryEmit(BleEvent.AckReceived(address, tagId, price))
 
         Handler(Looper.getMainLooper()).postDelayed({ gatt.disconnect() }, 200)
     }
@@ -263,7 +266,7 @@ class BleManager(private val context: Context) {
 
     fun connectAndWriteConfig(address: String, tagId: Int) {
         val device = bluetoothAdapter?.getRemoteDevice(address) ?: run {
-            _bleEvents.value = BleEvent.Error(address, "디바이스를 찾을 수 없음")
+            _bleEvents.tryEmit(BleEvent.Error(address, "디바이스를 찾을 수 없음"))
             return
         }
         activeGatt?.close()
@@ -286,20 +289,20 @@ class BleManager(private val context: Context) {
                     BluetoothProfile.STATE_DISCONNECTED -> {
                         Log.d(TAG, "Config: Disconnected from $address")
                         gatt.close()
-                        _bleEvents.value = BleEvent.Disconnected
+                        _bleEvents.tryEmit(BleEvent.Disconnected)
                     }
                 }
             }
 
             override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
                 if (status != BluetoothGatt.GATT_SUCCESS) {
-                    _bleEvents.value = BleEvent.Error(address, "서비스 검색 실패")
+                    _bleEvents.tryEmit(BleEvent.Error(address, "서비스 검색 실패"))
                     gatt.disconnect()
                     return
                 }
                 val char = gatt.getService(BleConstants.SERVICE_UUID)
                     ?.getCharacteristic(BleConstants.CONFIG_CHAR_UUID) ?: run {
-                    _bleEvents.value = BleEvent.Error(address, "Config Characteristic 없음 (펌웨어 확인)")
+                    _bleEvents.tryEmit(BleEvent.Error(address, "Config Characteristic 없음 (펌웨어 확인)"))
                     gatt.disconnect()
                     return
                 }
@@ -316,9 +319,9 @@ class BleManager(private val context: Context) {
             ) {
                 if (status == BluetoothGatt.GATT_SUCCESS) {
                     Log.d(TAG, "Config written: tagId=$tagId")
-                    _bleEvents.value = BleEvent.ConfigWriteSuccess(address, tagId)
+                    _bleEvents.tryEmit(BleEvent.ConfigWriteSuccess(address, tagId))
                 } else {
-                    _bleEvents.value = BleEvent.Error(address, "설정 쓰기 실패 (status=$status)")
+                    _bleEvents.tryEmit(BleEvent.Error(address, "설정 쓰기 실패 (status=$status)"))
                 }
                 Handler(Looper.getMainLooper()).postDelayed({ gatt.disconnect() }, 200)
             }

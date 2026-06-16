@@ -20,6 +20,9 @@ interface SmartTagDao {
     @Query("SELECT * FROM smart_tags WHERE groupId = :groupId AND status != 'UPDATED' ORDER BY tagId ASC")
     suspend fun getPendingTagsByGroup(groupId: Int): List<SmartTagEntity>
 
+    @Query("SELECT * FROM smart_tags WHERE status != 'UPDATED' ORDER BY tagId ASC")
+    suspend fun getAllPendingTags(): List<SmartTagEntity>
+
     @Query("SELECT * FROM smart_tags WHERE deviceAddress = :address LIMIT 1")
     suspend fun getTagByAddress(address: String): SmartTagEntity?
 
