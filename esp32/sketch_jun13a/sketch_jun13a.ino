@@ -161,7 +161,7 @@ static void updateOLED() {
 
     // 가격 레이블
     display.setCursor(0, 26);
-    display.print("PRICE (KRW)");
+    display.print("PRICE ");
 
     // 가격 (2배 크기)
     display.setTextSize(2);
