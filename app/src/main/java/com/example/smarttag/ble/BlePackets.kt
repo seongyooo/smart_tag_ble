@@ -22,8 +22,6 @@ data class PriceEntry(
 /** 태그가 방송하는 Type 0x01 파싱 결과 */
 data class Type01Data(
     val tagId: Int,
-    val price: Int,
-    val event: EventType,
     val lastSeq: Int           // 태그가 마지막으로 처리 완료한 Seq (0=없음)
 )
 
@@ -126,24 +124,13 @@ object BlePackets {
         return buf.array()
     }
 
-    // ── Type 0x01 파싱 (Company ID 이후 8B) ───────────────────
-    //  [0x01][TagID][Price 3B LE][Event][LastSeq][Rsvd]
-    //
-    //  NimBLE-Arduino 누적 이슈: setManufacturerData()가 append 동작이므로
-    //  updateAdvertising() 호출마다 8B씩 쌓일 수 있음 (16B, 24B...).
-    //  가장 최근 상태는 마지막 8B 블록에 있으므로 last block 기준으로 파싱.
+    // ── Type 0x01 파싱 (Company ID 이후) ──────────────────────
+    //  [0x01][TagID][LastSeq][Rsvd...]
     fun parseType01(mfgData: ByteArray): Type01Data? {
-        if (mfgData.size < 8) return null
+        if (mfgData.size < 3) return null
         if (mfgData[0].toInt() and 0xFF != 0x01) return null
-        // 마지막 완전한 8B 블록 오프셋
-        val off = (mfgData.size / 8 - 1) * 8
-        val tagId = mfgData[off + 1].toInt() and 0xFF
-        // Price 3B LE
-        val price = (mfgData[off + 2].toInt() and 0xFF) or
-                    ((mfgData[off + 3].toInt() and 0xFF) shl 8) or
-                    ((mfgData[off + 4].toInt() and 0xFF) shl 16)
-        val event   = EventType.fromCode(mfgData[off + 5].toInt() and 0x03)
-        val lastSeq = mfgData[off + 6].toInt() and 0xFF
-        return Type01Data(tagId, price, event, lastSeq)
+        val tagId   = mfgData[1].toInt() and 0xFF
+        val lastSeq = mfgData[2].toInt() and 0xFF
+        return Type01Data(tagId, lastSeq)
     }
 }

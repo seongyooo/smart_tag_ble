@@ -193,16 +193,14 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
                                 dao.setTagId(event.address, tagId)
                             }
                             val effectiveTagId = if (existing.tagId > 0) existing.tagId else tagId
-                            dao.updateCurrentState(effectiveTagId, event.data.price, lastSeq)
+                            dao.updateLastSeq(effectiveTagId, lastSeq)
 
                             // ── 수신 패킷 전체 덤프 ──────────────────────────────────
                             Log.d(LTAG, "┌─[0x01 수신]─────────────────────────────────────")
                             Log.d(LTAG, "│ addr       = ${event.address}")
                             Log.d(LTAG, "│ rxTagId    = $tagId  →  effectiveTagId = $effectiveTagId")
-                            Log.d(LTAG, "│ rxPrice    = ${event.data.price}원  rxEvent = ${event.data.event}(${event.data.event.code})")
                             Log.d(LTAG, "│ rxLastSeq  = $lastSeq")
                             Log.d(LTAG, "│ dbStatus   = ${existing.status}")
-                            Log.d(LTAG, "│ targetPrice= ${existing.targetPrice}원  targetEvent = ${existing.targetEvent}(${existing.targetEvent.code})")
                             Log.d(LTAG, "│ seqMap     = $seqMap")
                             Log.d(LTAG, "│ nameSeq    = $nameSeq")
 
@@ -263,28 +261,7 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
                                 Log.d(LTAG, "│ [SeqACK] lastSeq=0 → Seq 기반 ACK 건너뜀")
                             }
 
-                            // ── 3순위: Price+Event 폴백 ────────────────────────────
-                            val priceOk = existing.targetPrice > 0 &&
-                                          event.data.price / 10 == existing.targetPrice / 10
-                            val eventOk = event.data.event == existing.targetEvent
-                            Log.d(LTAG, "│ [FallbackACK] price: ${event.data.price}/10=${event.data.price/10} " +
-                                "== ${existing.targetPrice}/10=${existing.targetPrice/10} → $priceOk")
-                            Log.d(LTAG, "│ [FallbackACK] event: ${event.data.event}(${event.data.event.code}) " +
-                                "== ${existing.targetEvent}(${existing.targetEvent.code}) → $eventOk")
-                            if (priceOk && eventOk) {
-                                val freshTargetName = dao.getTagByAddress(event.address)?.targetName ?: ""
-                                if (freshTargetName.isEmpty()) {
-                                    priceAckedAddresses.remove(event.address)
-                                    dao.updateStatusByAddress(event.address, TagStatus.UPDATED)
-                                    Log.d(LTAG, "└─ ✅ Price+Event ACK 완료 (폴백)")
-                                    _snackbarMessage.value = "$label 동기화 완료"
-                                } else {
-                                    priceAckedAddresses.add(event.address)
-                                    Log.d(LTAG, "└─ ⏳ 폴백 Price 완료, Name ACK 대기 중 (targetName='$freshTargetName')")
-                                }
-                            } else {
-                                Log.d(LTAG, "└─ ❌ ACK 미충족 (price=$priceOk, event=$eventOk)")
-                            }
+                            Log.d(LTAG, "└─ ❌ Seq 미일치 (lastSeq=$lastSeq 매핑 없음)")
                         }
                     }
                     is BleEvent.AckReceived -> {

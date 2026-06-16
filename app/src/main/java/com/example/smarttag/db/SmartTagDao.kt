@@ -90,6 +90,10 @@ interface SmartTagDao {
     """)
     suspend fun updateCurrentState(tagId: Int, price: Int, crc: Int)
 
+    /** 0x01 수신 시 lastSeq만 갱신 (price는 GATT ACK에서만 업데이트) */
+    @Query("UPDATE smart_tags SET stateCrc = :lastSeq WHERE tagId = :tagId")
+    suspend fun updateLastSeq(tagId: Int, lastSeq: Int)
+
     @Query("UPDATE smart_tags SET status = :status WHERE tagId = :tagId")
     suspend fun updateStatusById(tagId: Int, status: TagStatus)
 

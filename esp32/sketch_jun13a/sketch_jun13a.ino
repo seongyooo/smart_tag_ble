@@ -103,28 +103,21 @@ static void saveState() {
 
 // ─────────────────────────────────────────────────────
 // Type 0x01 Advertising 업데이트
-// [CompID 2B][0x01][TagID][Price 3B LE][Event][LastSeq][Rsvd] = 10B
+// [CompID 2B][0x01][TagID][LastSeq][Rsvd] = 6B
 // ─────────────────────────────────────────────────────
 static void updateAdvertising() {
-    uint8_t mfg[10];
+    uint8_t mfg[6];
     mfg[0] = 0xFF;  mfg[1] = 0xFF;  // Company ID LE
     mfg[2] = 0x01;                   // Type
     mfg[3] = g_tagId;
-    // Price 3B LE (최대 16,777,215원)
-    mfg[4] = (g_price)       & 0xFF;
-    mfg[5] = (g_price >> 8)  & 0xFF;
-    mfg[6] = (g_price >> 16) & 0xFF;
-    mfg[7] = g_event;
-    mfg[8] = g_lastSeq;
-    mfg[9] = 0x00;  // Reserved
+    mfg[4] = g_lastSeq;
+    mfg[5] = 0x00;  // Reserved
 
     NimBLEAdvertising* pAdv = NimBLEDevice::getAdvertising();
     pAdv->stop();
 
-    // NimBLE-Arduino는 setManufacturerData()가 기존 데이터에 누적(append)됨.
-    // 매번 fresh NimBLEAdvertisementData 객체로 교체해 누적 방지.
     NimBLEAdvertisementData advData;
-    advData.setManufacturerData(std::string((char*)mfg, 10));
+    advData.setManufacturerData(std::string((char*)mfg, 6));
     pAdv->setAdvertisementData(advData);
 
     pAdv->start(0);

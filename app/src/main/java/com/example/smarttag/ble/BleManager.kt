@@ -79,8 +79,7 @@ class BleManager(private val context: Context) {
                 Log.d(TAG, "[0x01] raw(${mfgData.size}B) addr=${device.address} bytes=[$hex]")
                 val parsed = BlePackets.parseType01(mfgData)
                 if (parsed != null) {
-                    Log.d(TAG, "[0x01] parsed tagId=${parsed.tagId} price=${parsed.price} " +
-                        "event=${parsed.event} lastSeq=${parsed.lastSeq}")
+                    Log.d(TAG, "[0x01] parsed tagId=${parsed.tagId} lastSeq=${parsed.lastSeq}")
                     _bleEvents.tryEmit(BleEvent.TagInfoReceived(device.address, result.rssi, parsed))
                     updateDiscoveredTag(device, result.rssi, parsed.tagId)
                 } else {
