@@ -3,9 +3,12 @@ package com.example.smarttag.ui.screen
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Campaign
+import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -63,9 +66,48 @@ fun BroadcastScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // ── 테스트 데이터 세트 ──────────────────────────────────
+            Card(shape = RoundedCornerShape(12.dp)) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(Icons.Default.Science, contentDescription = null,
+                            tint = MaterialTheme.colorScheme.tertiary,
+                            modifier = Modifier.size(18.dp))
+                        Text("테스트 데이터 세트",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold)
+                    }
+                    Text(
+                        "DB에 있는 Tag 1~9의 목표 가격/이벤트를 일괄 적용합니다. (status → PENDING)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = { viewModel.applyTestDataset("A") },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("세트 A")
+                        }
+                        OutlinedButton(
+                            onClick = { viewModel.applyTestDataset("B") },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("세트 B")
+                        }
+                    }
+                    // 세트 요약표
+                    TestDatasetSummary()
+                }
+            }
+
             // 모드 선택
             Card(shape = RoundedCornerShape(12.dp)) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -121,8 +163,6 @@ fun BroadcastScreen(
             if (directMode && priceInput.isNotBlank()) {
                 BroadcastPreview(tagId = tagId, price = price)
             }
-
-            Spacer(modifier = Modifier.weight(1f))
 
             // 전송 버튼
             val canBroadcast = if (directMode) priceInput.isNotBlank() && tagIdInput.isNotBlank()
@@ -220,6 +260,72 @@ fun BroadcastScreen(
                     else -> {}
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun TestDatasetSummary() {
+    val rows = listOf(
+        // tagId, priceA, eventA, priceB, eventB
+        listOf("Tag", "세트 A", "", "세트 B", ""),
+        listOf("1", "1,100원", "-",    "5,000원",  "SALE 6/1~30"),
+        listOf("2", "1,500원", "1+1 6/1~30", "8,900원", "-"),
+        listOf("3", "2,000원", "-",    "12,000원", "1+1 6/20~30"),
+        listOf("4", "980원",   "SALE 6/15~20", "3,500원", "2+1"),
+        listOf("5", "3,200원", "2+1 6/1~15",  "15,000원", "-"),
+        listOf("6", "500원",   "-",    "2,200원",  "1+1 6/1~15"),
+        listOf("7", "1,800원", "1+1",  "9,800원",  "SALE 6/15~20"),
+        listOf("8", "4,500원", "-",    "22,000원", "-"),
+        listOf("9", "780원",   "SALE 6/10~25", "4,400원", "2+1 6/1~30"),
+    )
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        rows.forEachIndexed { idx, row ->
+            val isHeader = idx == 0
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    row[0],
+                    modifier = Modifier.width(36.dp),
+                    style = if (isHeader) MaterialTheme.typography.labelSmall
+                            else MaterialTheme.typography.bodySmall,
+                    fontWeight = if (isHeader) FontWeight.Bold else FontWeight.Normal,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        row[1],
+                        style = if (isHeader) MaterialTheme.typography.labelSmall
+                                else MaterialTheme.typography.bodySmall,
+                        fontWeight = if (isHeader) FontWeight.Bold else FontWeight.Normal,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    if (row[2].isNotEmpty()) Text(
+                        row[2],
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        row[3],
+                        style = if (isHeader) MaterialTheme.typography.labelSmall
+                                else MaterialTheme.typography.bodySmall,
+                        fontWeight = if (isHeader) FontWeight.Bold else FontWeight.Normal,
+                        color = MaterialTheme.colorScheme.secondary
+                    )
+                    if (row[4].isNotEmpty()) Text(
+                        row[4],
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            if (isHeader) HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
         }
     }
 }
