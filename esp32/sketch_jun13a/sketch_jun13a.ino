@@ -90,13 +90,14 @@ static bool verifyHmac24(const uint8_t* data, size_t len, const uint8_t* exp3) {
 // ─────────────────────────────────────────────────────
 static void saveState() {
     prefs.begin("smarttag", false);
-    prefs.putUChar("tagId",  g_tagId);
-    prefs.putUInt("price",   g_price);
-    prefs.putUChar("event",  g_event);
-    prefs.putUChar("sm",     g_startM);
-    prefs.putUChar("sd",     g_startD);
-    prefs.putUChar("em",     g_endM);
-    prefs.putUChar("ed",     g_endD);
+    prefs.putUChar("tagId",   g_tagId);
+    prefs.putUInt("price",    g_price);
+    prefs.putUChar("event",   g_event);
+    prefs.putUChar("sm",      g_startM);
+    prefs.putUChar("sd",      g_startD);
+    prefs.putUChar("em",      g_endM);
+    prefs.putUChar("ed",      g_endD);
+    prefs.putUChar("lastSeq", g_lastSeq);  // 재부팅 후에도 ACK seq 유지
     prefs.end();
 }
 
@@ -119,7 +120,13 @@ static void updateAdvertising() {
 
     NimBLEAdvertising* pAdv = NimBLEDevice::getAdvertising();
     pAdv->stop();
-    pAdv->setManufacturerData(std::string((char*)mfg, 10));
+
+    // NimBLE-Arduino는 setManufacturerData()가 기존 데이터에 누적(append)됨.
+    // 매번 fresh NimBLEAdvertisementData 객체로 교체해 누적 방지.
+    NimBLEAdvertisementData advData;
+    advData.setManufacturerData(std::string((char*)mfg, 10));
+    pAdv->setAdvertisementData(advData);
+
     pAdv->start(0);
 }
 
@@ -409,18 +416,19 @@ void setup() {
 
     // NVS에서 이전 상태 복원 (BLE 초기화 전 tagId 확보 필요)
     prefs.begin("smarttag", true);
-    g_tagId  = prefs.getUChar("tagId",  TAG_ID_DEFAULT);
-    g_price  = prefs.getUInt("price",  0);
-    g_event  = prefs.getUChar("event", 0);
-    g_startM = prefs.getUChar("sm",    0);
-    g_startD = prefs.getUChar("sd",    0);
-    g_endM   = prefs.getUChar("em",    0);
-    g_endD   = prefs.getUChar("ed",    0);
+    g_tagId   = prefs.getUChar("tagId",   TAG_ID_DEFAULT);
+    g_price   = prefs.getUInt("price",   0);
+    g_event   = prefs.getUChar("event",  0);
+    g_startM  = prefs.getUChar("sm",     0);
+    g_startD  = prefs.getUChar("sd",     0);
+    g_endM    = prefs.getUChar("em",     0);
+    g_endD    = prefs.getUChar("ed",     0);
+    g_lastSeq = prefs.getUChar("lastSeq", 0);
     String nameStr = prefs.getString("name", "");
     strncpy(g_name, nameStr.c_str(), sizeof(g_name) - 1);
     prefs.end();
-    Serial.printf("[NVS] TagID=%d Price=%lu Event=%d Name=%s\n",
-                  g_tagId, (unsigned long)g_price, g_event, g_name);
+    Serial.printf("[NVS] TagID=%d Price=%lu Event=%d LastSeq=%d Name=%s\n",
+                  g_tagId, (unsigned long)g_price, g_event, g_lastSeq, g_name);
 
     // BLE 초기화 (장치명은 TagID 기반)
     char deviceName[16];
