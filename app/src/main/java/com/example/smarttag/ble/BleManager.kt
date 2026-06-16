@@ -75,10 +75,16 @@ class BleManager(private val context: Context) {
             // ── 제조사 데이터 파싱 (0x01 Tag Info) ──
             val mfgData = record?.getManufacturerSpecificData(COMPANY_ID)
             if (mfgData != null && mfgData[0].toInt() and 0xFF == 0x01) {
+                val hex = mfgData.joinToString(" ") { "%02X".format(it) }
+                Log.d(TAG, "[0x01] raw(${mfgData.size}B) addr=${device.address} bytes=[$hex]")
                 val parsed = BlePackets.parseType01(mfgData)
                 if (parsed != null) {
+                    Log.d(TAG, "[0x01] parsed tagId=${parsed.tagId} price=${parsed.price} " +
+                        "event=${parsed.event} lastSeq=${parsed.lastSeq}")
                     _bleEvents.tryEmit(BleEvent.TagInfoReceived(device.address, result.rssi, parsed))
                     updateDiscoveredTag(device, result.rssi, parsed.tagId)
+                } else {
+                    Log.w(TAG, "[0x01] parseType01 실패 (size=${mfgData.size})")
                 }
                 return
             }
@@ -411,10 +417,19 @@ class BleManager(private val context: Context) {
 
         val cb = object : AdvertiseCallback() {
             override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
-                Log.d(TAG, "Advertising started (${payload[0].toInt() and 0xFF} type)")
+                val type = payload[0].toInt() and 0xFF
+                Log.d(TAG, "✅ Advertising started type=0x%02X payloadSize=${payload.size}B".format(type))
             }
             override fun onStartFailure(errorCode: Int) {
-                Log.e(TAG, "Advertising failed: $errorCode")
+                val reason = when (errorCode) {
+                    ADVERTISE_FAILED_DATA_TOO_LARGE    -> "DATA_TOO_LARGE(1)"
+                    ADVERTISE_FAILED_TOO_MANY_ADVERTISERS -> "TOO_MANY_ADVERTISERS(2)"
+                    ADVERTISE_FAILED_ALREADY_STARTED   -> "ALREADY_STARTED(3)"
+                    ADVERTISE_FAILED_INTERNAL_ERROR    -> "INTERNAL_ERROR(4)"
+                    ADVERTISE_FAILED_FEATURE_UNSUPPORTED -> "FEATURE_UNSUPPORTED(5)"
+                    else -> "UNKNOWN($errorCode)"
+                }
+                Log.e(TAG, "❌ Advertising failed: $reason payloadSize=${payload.size}B")
             }
         }
         advertiseCallback = cb

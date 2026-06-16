@@ -180,7 +180,7 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
                         viewModelScope.launch {
                             val existing = dao.getTagByAddress(event.address)
                             if (existing == null) {
-                                Log.d(LTAG, "[0x01] addr=${event.address} → DB에 없음 (existing=null)")
+                                Log.d(LTAG, "[0x01] addr=${event.address} → DB에 없음, 스킵")
                                 return@launch
                             }
 
@@ -191,50 +191,65 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
                             val effectiveTagId = if (existing.tagId > 0) existing.tagId else tagId
                             dao.updateCurrentState(effectiveTagId, event.data.price, lastSeq)
 
-                            Log.d(LTAG, "[0x01] addr=${event.address} " +
-                                "rxTagId=$tagId effectiveTagId=$effectiveTagId lastSeq=$lastSeq " +
-                                "rxPrice=${event.data.price} rxEvent=${event.data.event} " +
-                                "status=${existing.status} targetPrice=${existing.targetPrice} " +
-                                "targetEvent=${existing.targetEvent} seqMap=$seqMap")
+                            // ── 수신 패킷 전체 덤프 ──────────────────────────────────
+                            Log.d(LTAG, "┌─[0x01 수신]─────────────────────────────────────")
+                            Log.d(LTAG, "│ addr       = ${event.address}")
+                            Log.d(LTAG, "│ rxTagId    = $tagId  →  effectiveTagId = $effectiveTagId")
+                            Log.d(LTAG, "│ rxPrice    = ${event.data.price}원  rxEvent = ${event.data.event}(${event.data.event.code})")
+                            Log.d(LTAG, "│ rxLastSeq  = $lastSeq")
+                            Log.d(LTAG, "│ dbStatus   = ${existing.status}")
+                            Log.d(LTAG, "│ targetPrice= ${existing.targetPrice}원  targetEvent = ${existing.targetEvent}(${existing.targetEvent.code})")
+                            Log.d(LTAG, "│ seqMap     = $seqMap")
+                            Log.d(LTAG, "│ nameSeq    = $nameSeq")
 
-                            if (existing.status != TagStatus.PENDING) return@launch
+                            if (existing.status != TagStatus.PENDING) {
+                                Log.d(LTAG, "└─ 스킵: status=${existing.status} (PENDING 아님)")
+                                return@launch
+                            }
 
                             val label = existing.productName.ifBlank { "Tag $effectiveTagId" }
 
-                            // 1순위: Seq 기반 ACK — 앱이 보낸 seq를 ESP32가 0x01로 에코
+                            // ── 1순위: Seq 기반 ACK ────────────────────────────────
                             if (lastSeq > 0) {
                                 val priceTagIds = seqMap[lastSeq]
+                                Log.d(LTAG, "│ [SeqACK] lastSeq=$lastSeq → seqMap[$lastSeq]=$priceTagIds  effectiveTagId=$effectiveTagId")
                                 if (priceTagIds != null && effectiveTagId in priceTagIds) {
                                     val remaining = priceTagIds.filterNot { it == effectiveTagId }
                                     if (remaining.isEmpty()) seqMap.remove(lastSeq)
                                     else seqMap[lastSeq] = remaining
                                     dao.updateStatusByAddress(event.address, TagStatus.UPDATED)
-                                    Log.d(LTAG, "→ Seq ACK 완료 (seq=$lastSeq, tagId=$effectiveTagId)")
+                                    Log.d(LTAG, "└─ ✅ Seq ACK 완료 (seq=$lastSeq, tagId=$effectiveTagId)")
                                     _snackbarMessage.value = "$label 동기화 완료"
                                     return@launch
                                 }
                                 // 이름 업데이트 Seq 확인
-                                if (nameSeq[effectiveTagId] == lastSeq) {
+                                val expectedNameSeq = nameSeq[effectiveTagId]
+                                Log.d(LTAG, "│ [NameSeqACK] nameSeq[$effectiveTagId]=$expectedNameSeq vs lastSeq=$lastSeq")
+                                if (expectedNameSeq == lastSeq) {
                                     nameSeq.remove(effectiveTagId)
                                     dao.updateStatusByAddress(event.address, TagStatus.UPDATED)
-                                    Log.d(LTAG, "→ Name Seq ACK 완료 (seq=$lastSeq)")
+                                    Log.d(LTAG, "└─ ✅ Name Seq ACK 완료 (seq=$lastSeq)")
                                     return@launch
                                 }
+                                Log.d(LTAG, "│ [SeqACK] → 미일치 (seqMap에 없거나 tagId 불일치)")
+                            } else {
+                                Log.d(LTAG, "│ [SeqACK] lastSeq=0 → Seq 기반 ACK 건너뜀")
                             }
 
-                            // 2순위: Price+Event 값 비교 (폴백 — Seq 미일치 시)
-                            // 가격은 10원 단위로 비교 (0x02 전송 시 /10 절삭)
-                            if (existing.targetPrice > 0 &&
-                                event.data.price / 10 == existing.targetPrice / 10 &&
-                                event.data.event == existing.targetEvent) {
+                            // ── 2순위: Price+Event 폴백 ────────────────────────────
+                            val priceOk  = existing.targetPrice > 0 &&
+                                           event.data.price / 10 == existing.targetPrice / 10
+                            val eventOk  = event.data.event == existing.targetEvent
+                            Log.d(LTAG, "│ [FallbackACK] price: ${event.data.price}/10=${event.data.price/10} " +
+                                "== ${existing.targetPrice}/10=${existing.targetPrice/10} → $priceOk")
+                            Log.d(LTAG, "│ [FallbackACK] event: ${event.data.event}(${event.data.event.code}) " +
+                                "== ${existing.targetEvent}(${existing.targetEvent.code}) → $eventOk")
+                            if (priceOk && eventOk) {
                                 dao.updateStatusByAddress(event.address, TagStatus.UPDATED)
-                                Log.d(LTAG, "→ Price+Event ACK 완료 (폴백)")
+                                Log.d(LTAG, "└─ ✅ Price+Event ACK 완료 (폴백)")
                                 _snackbarMessage.value = "$label 동기화 완료"
                             } else {
-                                Log.d(LTAG, "→ ACK 미충족: " +
-                                    "seqCheck=($lastSeq in seqMap=${seqMap.keys}) " +
-                                    "priceMatch=${event.data.price/10}==${existing.targetPrice/10} " +
-                                    "eventMatch=${event.data.event}==${existing.targetEvent}")
+                                Log.d(LTAG, "└─ ❌ ACK 미충족 (price=$priceOk, event=$eventOk)")
                             }
                         }
                     }
