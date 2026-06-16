@@ -20,6 +20,7 @@ data class SmartTagEntity(
     val targetEvent: EventType,
     val targetStartDate: LocalDate?,
     val targetEndDate: LocalDate?,
+    val targetName: String = "",  // 변경 예약된 상품명 ("" = 변경 없음)
     // 현재 상태 (태그 0x01 수신)
     val currentPrice: Int,
     val stateCrc: Int,
@@ -37,6 +38,7 @@ fun SmartTagEntity.toModel() = SmartTag(
     targetEvent = targetEvent,
     targetStartDate = targetStartDate,
     targetEndDate = targetEndDate,
+    targetName = targetName,
     currentPrice = currentPrice,
     stateCrc = stateCrc,
     status = status
@@ -53,6 +55,7 @@ fun SmartTag.toEntity() = SmartTagEntity(
     targetEvent = targetEvent,
     targetStartDate = targetStartDate,
     targetEndDate = targetEndDate,
+    targetName = targetName,
     currentPrice = currentPrice,
     stateCrc = stateCrc,
     status = status

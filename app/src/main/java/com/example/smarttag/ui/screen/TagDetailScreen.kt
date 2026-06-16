@@ -43,6 +43,7 @@ fun TagDetailScreen(
 
     // ── 브로드캐스트 목표 설정 상태 ─────────────────────────────────
     var targetPriceInput  by remember { mutableStateOf("") }
+    var targetNameInput   by remember { mutableStateOf("") }
     var targetEvent       by remember { mutableStateOf(EventType.NONE) }
     var targetStartMonth  by remember { mutableStateOf("") }
     var targetStartDay    by remember { mutableStateOf("") }
@@ -60,6 +61,7 @@ fun TagDetailScreen(
             selectedGroupId = it.groupId
             priceInput = if (it.targetPrice > 0) it.targetPrice.toString() else ""
             targetPriceInput = if (it.targetPrice > 0) it.targetPrice.toString() else ""
+            targetNameInput  = it.targetName
             targetEvent = it.targetEvent
             targetStartMonth = it.targetStartDate?.monthValue?.toString() ?: ""
             targetStartDay   = it.targetStartDate?.dayOfMonth?.toString() ?: ""
@@ -271,6 +273,37 @@ fun TagDetailScreen(
                         suffix = { Text("원") }
                     )
 
+                    OutlinedTextField(
+                        value = targetNameInput,
+                        onValueChange = { targetNameInput = it; targetSaved = false },
+                        label = { Text("상품명 변경 (선택)") },
+                        placeholder = { Text("변경할 상품명을 입력하세요") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        trailingIcon = if (targetNameInput.isNotEmpty()) {{
+                            IconButton(onClick = { targetNameInput = ""; targetSaved = false }) {
+                                Icon(Icons.Default.Clear, contentDescription = "초기화",
+                                    modifier = Modifier.size(16.dp))
+                            }
+                        }} else null
+                    )
+                    if (tag.targetName.isNotEmpty()) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(Icons.Default.Pending,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.tertiary,
+                                modifier = Modifier.size(14.dp))
+                            Text(
+                                "이름 변경 대기 중: \"${tag.targetName}\"",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.tertiary
+                            )
+                        }
+                    }
+
                     Text("이벤트", style = MaterialTheme.typography.labelLarge)
                     val eventOptions = listOf(
                         EventType.NONE to "없음",
@@ -335,6 +368,7 @@ fun TagDetailScreen(
                             val startDate = buildDate(targetStartMonth, targetStartDay)
                             val endDate   = buildDate(targetEndMonth, targetEndDay)
                             viewModel.setTargetState(address, targetPrice, targetEvent, startDate, endDate)
+                            viewModel.setTargetName(address, targetNameInput)
                             targetSaved = true
                         },
                         enabled = targetPrice > 0,

@@ -14,6 +14,7 @@ data class SmartTag(
     val targetEvent: EventType = EventType.NONE,
     val targetStartDate: LocalDate? = null,
     val targetEndDate: LocalDate? = null,
+    val targetName: String = "",  // 변경 예약된 상품명 ("" = 변경 없음)
     // 현재 상태 (태그 0x01 방송에서 수신한 값)
     val currentPrice: Int = 0,
     val stateCrc: Int = 0,       // 태그에서 수신한 StateCRC16

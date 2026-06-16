@@ -192,6 +192,9 @@ static void updateOLED() {
         int px = (SCREEN_WIDTH - (int)strlen(out) * 12) / 2;
         display.setCursor(max(0, px), 40);
         display.print(out);
+
+        display.setTextSize(2);
+        display.print("$");
     }
 
     display.display();

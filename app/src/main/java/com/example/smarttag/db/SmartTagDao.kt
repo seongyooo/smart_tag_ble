@@ -68,6 +68,18 @@ interface SmartTagDao {
     @Query("UPDATE smart_tags SET productName = :name WHERE deviceAddress = :address")
     suspend fun setProductName(address: String, name: String)
 
+    /**
+     * 브로드캐스트 전에 변경할 이름을 예약. status를 PENDING으로 전환.
+     */
+    @Query("UPDATE smart_tags SET targetName = :name, status = 'PENDING' WHERE deviceAddress = :address")
+    suspend fun setTargetName(address: String, name: String)
+
+    /**
+     * 이름 ACK 확인 후 실제 적용: productName = name, targetName 초기화
+     */
+    @Query("UPDATE smart_tags SET productName = :name, targetName = '' WHERE deviceAddress = :address")
+    suspend fun confirmName(address: String, name: String)
+
     // ── 현재 상태 업데이트 (0x01 수신 시) ─────────────────────────
 
     @Query("""

@@ -67,6 +67,9 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
     private val seqMap = mutableMapOf<Int, List<Int>>()    // seq → [tagId, ...]
     private val nameSeq = mutableMapOf<Int, Int>()          // tagId → 마지막 단편 Seq
 
+    // ── B안: 이름 ACK 전에 가격 ACK가 먼저 온 태그 주소 집합 ──────
+    private val priceAckedAddresses = mutableSetOf<String>()
+
     // ── 브로드캐스트 오프셋 (순환 전송용) ────────────────────────
     private var broadcastOffset = 0
 
@@ -144,7 +147,8 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
                 targetEndDate = savedTag?.targetEndDate,
                 currentPrice = savedTag?.currentPrice ?: 0,
                 stateCrc = savedTag?.stateCrc ?: 0,
-                status = savedTag?.status ?: TagStatus.PENDING
+                status = savedTag?.status ?: TagStatus.PENDING,
+                targetName = savedTag?.targetName ?: ""
             )
         }.sortedByDescending { it.rssi }
 
@@ -209,45 +213,75 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
 
                             val label = existing.productName.ifBlank { "Tag $effectiveTagId" }
 
-                            // ── 1순위: Seq 기반 ACK ────────────────────────────────
+                            // ── 1순위: 이름 Seq ACK ────────────────────────────────
+                            if (lastSeq > 0) {
+                                val expectedNameSeq = nameSeq[effectiveTagId]
+                                Log.d(LTAG, "│ [NameSeqACK] nameSeq[$effectiveTagId]=$expectedNameSeq vs lastSeq=$lastSeq")
+                                if (expectedNameSeq != null && expectedNameSeq == lastSeq) {
+                                    nameSeq.remove(effectiveTagId)
+                                    val targetName = existing.targetName
+                                    if (targetName.isNotEmpty()) {
+                                        dao.confirmName(event.address, targetName)
+                                        Log.d(LTAG, "│ ✅ Name ACK → productName='$targetName' 저장")
+                                    }
+                                    // B안: 가격이 이미 ACK됐다면 지금 UPDATED
+                                    if (event.address in priceAckedAddresses) {
+                                        priceAckedAddresses.remove(event.address)
+                                        dao.updateStatusByAddress(event.address, TagStatus.UPDATED)
+                                        Log.d(LTAG, "└─ ✅ Name+Price 모두 완료 → UPDATED")
+                                        _snackbarMessage.value = "$label 동기화 완료"
+                                    } else {
+                                        Log.d(LTAG, "└─ ⏳ Name ACK 완료, Price ACK 대기 중")
+                                    }
+                                    return@launch
+                                }
+                            }
+
+                            // ── 2순위: 가격 Seq ACK ────────────────────────────────
                             if (lastSeq > 0) {
                                 val priceTagIds = seqMap[lastSeq]
-                                Log.d(LTAG, "│ [SeqACK] lastSeq=$lastSeq → seqMap[$lastSeq]=$priceTagIds  effectiveTagId=$effectiveTagId")
+                                Log.d(LTAG, "│ [PriceSeqACK] lastSeq=$lastSeq → seqMap[$lastSeq]=$priceTagIds  effectiveTagId=$effectiveTagId")
                                 if (priceTagIds != null && effectiveTagId in priceTagIds) {
                                     val remaining = priceTagIds.filterNot { it == effectiveTagId }
                                     if (remaining.isEmpty()) seqMap.remove(lastSeq)
                                     else seqMap[lastSeq] = remaining
-                                    dao.updateStatusByAddress(event.address, TagStatus.UPDATED)
-                                    Log.d(LTAG, "└─ ✅ Seq ACK 완료 (seq=$lastSeq, tagId=$effectiveTagId)")
-                                    _snackbarMessage.value = "$label 동기화 완료"
+                                    // B안: targetName이 비어야 UPDATED
+                                    val freshTargetName = dao.getTagByAddress(event.address)?.targetName ?: ""
+                                    if (freshTargetName.isEmpty()) {
+                                        priceAckedAddresses.remove(event.address)
+                                        dao.updateStatusByAddress(event.address, TagStatus.UPDATED)
+                                        Log.d(LTAG, "└─ ✅ Price Seq ACK 완료 (seq=$lastSeq)")
+                                        _snackbarMessage.value = "$label 동기화 완료"
+                                    } else {
+                                        priceAckedAddresses.add(event.address)
+                                        Log.d(LTAG, "└─ ⏳ Price ACK 완료, Name ACK 대기 중 (targetName='$freshTargetName')")
+                                    }
                                     return@launch
                                 }
-                                // 이름 업데이트 Seq 확인
-                                val expectedNameSeq = nameSeq[effectiveTagId]
-                                Log.d(LTAG, "│ [NameSeqACK] nameSeq[$effectiveTagId]=$expectedNameSeq vs lastSeq=$lastSeq")
-                                if (expectedNameSeq == lastSeq) {
-                                    nameSeq.remove(effectiveTagId)
-                                    dao.updateStatusByAddress(event.address, TagStatus.UPDATED)
-                                    Log.d(LTAG, "└─ ✅ Name Seq ACK 완료 (seq=$lastSeq)")
-                                    return@launch
-                                }
-                                Log.d(LTAG, "│ [SeqACK] → 미일치 (seqMap에 없거나 tagId 불일치)")
+                                Log.d(LTAG, "│ [PriceSeqACK] → 미일치")
                             } else {
                                 Log.d(LTAG, "│ [SeqACK] lastSeq=0 → Seq 기반 ACK 건너뜀")
                             }
 
-                            // ── 2순위: Price+Event 폴백 ────────────────────────────
-                            val priceOk  = existing.targetPrice > 0 &&
-                                           event.data.price / 10 == existing.targetPrice / 10
-                            val eventOk  = event.data.event == existing.targetEvent
+                            // ── 3순위: Price+Event 폴백 ────────────────────────────
+                            val priceOk = existing.targetPrice > 0 &&
+                                          event.data.price / 10 == existing.targetPrice / 10
+                            val eventOk = event.data.event == existing.targetEvent
                             Log.d(LTAG, "│ [FallbackACK] price: ${event.data.price}/10=${event.data.price/10} " +
                                 "== ${existing.targetPrice}/10=${existing.targetPrice/10} → $priceOk")
                             Log.d(LTAG, "│ [FallbackACK] event: ${event.data.event}(${event.data.event.code}) " +
                                 "== ${existing.targetEvent}(${existing.targetEvent.code}) → $eventOk")
                             if (priceOk && eventOk) {
-                                dao.updateStatusByAddress(event.address, TagStatus.UPDATED)
-                                Log.d(LTAG, "└─ ✅ Price+Event ACK 완료 (폴백)")
-                                _snackbarMessage.value = "$label 동기화 완료"
+                                val freshTargetName = dao.getTagByAddress(event.address)?.targetName ?: ""
+                                if (freshTargetName.isEmpty()) {
+                                    priceAckedAddresses.remove(event.address)
+                                    dao.updateStatusByAddress(event.address, TagStatus.UPDATED)
+                                    Log.d(LTAG, "└─ ✅ Price+Event ACK 완료 (폴백)")
+                                    _snackbarMessage.value = "$label 동기화 완료"
+                                } else {
+                                    priceAckedAddresses.add(event.address)
+                                    Log.d(LTAG, "└─ ⏳ 폴백 Price 완료, Name ACK 대기 중 (targetName='$freshTargetName')")
+                                }
                             } else {
                                 Log.d(LTAG, "└─ ❌ ACK 미충족 (price=$priceOk, event=$eventOk)")
                             }
@@ -350,6 +384,12 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // Seq 순환 래핑 (1..255)
+    private fun wrapSeqLocal(s: Int): Int = ((s - 1) % 255) + 1
+
+    private fun nameFragCount(name: String): Int =
+        maxOf(1, (name.toByteArray(Charsets.UTF_8).size + 17) / 18)
+
     private suspend fun runBroadcastLoop(maxRetries: Int = 15) {
         var retries = 0
         while (retries < maxRetries) {
@@ -370,26 +410,48 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
 
             _broadcastQueueState.value = BroadcastQueueState.Running(readyTags.size)
 
-            // 순환 오프셋으로 매 iteration마다 다른 3개 선택 → ACK 실패해도 다음 태그로 진행
+            // ── Step A: 이름 브로드캐스트 (targetName 있는 태그) ─────────
+            // 이름이 아직 미확인인 태그만 대상 (nameSeq에 없으면 아직 전송 안 했거나 ACK 완료)
+            val namePendingTags = readyTags.filter { it.targetName.isNotEmpty() }
+            for (tag in namePendingTags) {
+                val fragCount = nameFragCount(tag.targetName)
+                val startSeq  = allocSeqs(fragCount)
+                val lastFragSeq = wrapSeqLocal(startSeq + fragCount - 1)
+                nameSeq[tag.tagId] = lastFragSeq
+
+                bleManager.stopScan()
+                bleManager.broadcastNameUpdate(tag.tagId, tag.targetName, startSeq)
+                Log.d(LTAG, "[name broadcast] tagId=${tag.tagId} name='${tag.targetName}' frags=$fragCount startSeq=$startSeq lastFragSeq=$lastFragSeq")
+
+                // 모든 단편 전송 완료까지 대기 (1s/단편 + 여유 500ms)
+                delay(fragCount * 1000L + 500L)
+
+                // 이름 ACK 수신 스캔 (2s)
+                bleManager.startScan()
+                delay(2000L)
+                bleManager.stopScan()
+            }
+
+            // ── Step B: 가격 브로드캐스트 (0x02) ───────────────────────
             val startIdx = broadcastOffset % readyTags.size
             val entries = (0 until minOf(3, readyTags.size)).map { i ->
                 val tag = readyTags[(startIdx + i) % readyTags.size]
                 PriceEntry(tag.tagId, tag.targetPrice, tag.targetEvent, tag.targetStartDate, tag.targetEndDate)
             }
             broadcastOffset += 3
-            Log.d(LTAG, "[broadcast] seq=${nextSeq} entries=${entries.joinToString { "tagId=${it.tagId} price=${it.price} event=${it.event}" }}")
+            Log.d(LTAG, "[price broadcast] seq=${nextSeq} entries=${entries.joinToString { "tagId=${it.tagId} price=${it.price} event=${it.event}" }}")
             val seq = allocSeqs(1)
             seqMap[seq] = entries.map { it.tagId }
-            // 브로드캐스트 중 스캔 간섭 방지: 광고 전 스캔 중지
+
             bleManager.stopScan()
             bleManager.broadcastPriceUpdate(seq, entries, 5000L)
 
             // 5s 광고 종료까지 대기 + ESP32가 0x01 갱신할 시간 확보
             delay(5500L)
 
-            // 스캔 재시작 → Android BLE 캐시 초기화, 업데이트된 0x01 수신
+            // 스캔 재시작 → 업데이트된 0x01 수신 (가격+이름 ACK 동시 처리)
             bleManager.startScan()
-            delay(3000L)  // 새 0x01 수신 후 ACK 처리 대기
+            delay(3000L)
 
             retries++
         }
@@ -465,6 +527,17 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             ensureTagInDb(address)
             dao.setTargetState(address, price, event, startDate, endDate)
+        }
+    }
+
+    /**
+     * 브로드캐스트 시 상품명 변경 예약 (DB → PENDING, targetName 설정)
+     * 빈 문자열 전달 시 예약 취소
+     */
+    fun setTargetName(address: String, name: String) {
+        viewModelScope.launch {
+            ensureTagInDb(address)
+            dao.setTargetName(address, name.trim())
         }
     }
 
