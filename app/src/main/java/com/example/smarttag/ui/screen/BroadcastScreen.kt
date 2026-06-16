@@ -1,6 +1,7 @@
 package com.example.smarttag.ui.screen
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.rememberScrollState
@@ -71,6 +72,7 @@ fun BroadcastScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // ── 테스트 데이터 세트 ──────────────────────────────────
+            var showSummary by remember { mutableStateOf(false) }
             Card(shape = RoundedCornerShape(12.dp)) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(
@@ -84,27 +86,30 @@ fun BroadcastScreen(
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold)
                     }
-                    Text(
-                        "DB에 있는 Tag 1~9의 목표 가격/이벤트를 일괄 적용합니다. (status → PENDING)",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(
+                        Button(
                             onClick = { viewModel.applyTestDataset("A") },
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text("세트 A")
+                            Text("세트 A 적용")
                         }
-                        OutlinedButton(
+                        Button(
                             onClick = { viewModel.applyTestDataset("B") },
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text("세트 B")
+                            Text("세트 B 적용")
                         }
                     }
-                    // 세트 요약표
-                    TestDatasetSummary()
+                    TextButton(
+                        onClick = { showSummary = !showSummary },
+                        contentPadding = PaddingValues(0.dp)
+                    ) {
+                        Text(
+                            if (showSummary) "세트 내용 닫기 ▲" else "세트 내용 보기 ▼",
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
+                    if (showSummary) TestDatasetSummary()
                 }
             }
 
