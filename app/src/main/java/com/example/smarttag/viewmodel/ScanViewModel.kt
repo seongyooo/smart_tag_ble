@@ -74,9 +74,6 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
     // ── B안: 이름 ACK 전에 가격 ACK가 먼저 온 태그 주소 집합 ──────
     private val priceAckedAddresses = mutableSetOf<String>()
 
-    // ── 브로드캐스트 오프셋 (순환 전송용) ────────────────────────
-    private var broadcastOffset = 0
-
     // ── 브로드캐스트 루프 Job ─────────────────────────────────────
     private var broadcastLoopJob: Job? = null
     private var scanStartedByBroadcast = false  // 브로드캐스트가 스캔을 켰는지 추적
@@ -386,7 +383,6 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun startBroadcast(maxRetries: Int = 15) {
         broadcastLoopJob?.cancel()
-        broadcastOffset = 0
         broadcastLoopJob = viewModelScope.launch {
             runBroadcastLoop(maxRetries)
         }
@@ -422,8 +418,12 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
 
             _broadcastQueueState.value = BroadcastQueueState.Running(readyTags.size)
 
-            // ── Step A: 이름 브로드캐스트 (스캔 유지한 채 동시 전송) ──────
-            val namePendingTags = readyTags.filter { it.targetName.isNotEmpty() }
+            // 현재 스캔 결과에서 RSSI 조회 (없으면 -100으로 처리 → 우선순위 최하)
+            val rssiMap = _mergedTags.value.associate { it.deviceAddress to it.rssi }
+            val rssiSortedTags = readyTags.sortedByDescending { rssiMap[it.deviceAddress] ?: -100 }
+
+            // ── Step A: 이름 브로드캐스트 (RSSI 높은 순, 스캔 유지한 채 동시 전송) ──
+            val namePendingTags = rssiSortedTags.filter { it.targetName.isNotEmpty() }
             for (tag in namePendingTags) {
                 val fragCount   = nameFragCount(tag.targetName)
                 val startSeq    = allocSeqs(fragCount)
@@ -431,20 +431,17 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
                 nameSeq[tag.tagId] = lastFragSeq
 
                 bleManager.broadcastNameUpdate(tag.tagId, tag.targetName, startSeq)
-                Log.d(LTAG, "[name broadcast] tagId=${tag.tagId} name='${tag.targetName}' frags=$fragCount startSeq=$startSeq lastFragSeq=$lastFragSeq")
+                Log.d(LTAG, "[name broadcast] tagId=${tag.tagId} rssi=${rssiMap[tag.deviceAddress]} name='${tag.targetName}' frags=$fragCount startSeq=$startSeq lastFragSeq=$lastFragSeq")
 
                 // 단편 전송 완료(1s/단편) + ACK 수신 여유 2s (스캔은 이미 켜져 있음)
                 delay(fragCount * 1000L + 2000L)
             }
 
-            // ── Step B: 가격 브로드캐스트 (스캔 유지한 채 동시 전송) ──────
-            val startIdx = broadcastOffset % readyTags.size
-            val entries = (0 until minOf(3, readyTags.size)).map { i ->
-                val tag = readyTags[(startIdx + i) % readyTags.size]
+            // ── Step B: 가격 브로드캐스트 (RSSI 높은 순 상위 3개) ────────────
+            val entries = rssiSortedTags.take(3).map { tag ->
                 PriceEntry(tag.tagId, tag.targetPrice, tag.targetEvent, tag.targetStartDate, tag.targetEndDate)
             }
-            broadcastOffset += 3
-            Log.d(LTAG, "[price broadcast] seq=${nextSeq} entries=${entries.joinToString { "tagId=${it.tagId} price=${it.price} event=${it.event}" }}")
+            Log.d(LTAG, "[price broadcast] seq=${nextSeq} entries=${entries.joinToString { "tagId=${it.tagId} rssi=${rssiMap.entries.firstOrNull { e -> e.key == readyTags.firstOrNull { t -> t.tagId == it.tagId }?.deviceAddress }?.value} price=${it.price}" }}")
             val seq = allocSeqs(1)
             seqMap[seq] = entries.map { it.tagId }
 
