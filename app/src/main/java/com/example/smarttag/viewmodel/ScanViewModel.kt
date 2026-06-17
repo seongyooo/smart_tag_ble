@@ -60,7 +60,7 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
 
     private var zoneCandidate: Int? = null          // 현재 1위 후보
     private var zoneCandidateSince: Long = 0L       // 후보가 1위가 된 시각 (ms)
-    private val ZONE_DEBOUNCE_MS = 5_000L           // 5초 유지 시 구역 전환
+    private val ZONE_DEBOUNCE_MS = 1_000L           // 1초 유지 시 구역 전환
 
     // ── 브로드캐스트 큐 상태 ─────────────────────────────────────
     private val _broadcastQueueState = MutableStateFlow<BroadcastQueueState>(BroadcastQueueState.Idle)
@@ -445,10 +445,10 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
             val seq = allocSeqs(1)
             seqMap[seq] = entries.map { it.tagId }
 
-            bleManager.broadcastPriceUpdate(seq, entries, 5000L)
+            bleManager.broadcastPriceUpdate(seq, entries, 1000L)
 
-            // 광고 5s + ESP32가 0x01 갱신 후 ACK 수신 여유 2s
-            delay(7000L)
+            // 광고 1s 종료 후 ACK 수신 여유 2s (스캔은 광고 중에도 동시 동작)
+            delay(3000L)
 
             retries++
         }
@@ -588,17 +588,17 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
             )
             "B" -> mapOf(
                 // 라면 (groupId=1)
-                1 to TestPreset(1, 1000,  EventType.DISCOUNT,     LocalDate.of(2026, 6,  1), LocalDate.of(2026, 6, 30), "Shin Ramen"),
-                2 to TestPreset(1, 1500,  EventType.TWO_PLUS_ONE, LocalDate.of(2026, 6, 15), LocalDate.of(2026, 6, 30), "Jin Ramen"),
-                3 to TestPreset(1, 1300,  EventType.ONE_PLUS_ONE, null,                       null,                       "Neoguri"),
+                1 to TestPreset(1, 1350,  EventType.DISCOUNT,     LocalDate.of(2026, 6,  1), LocalDate.of(2026, 6, 30), "Chapagetti"),
+                2 to TestPreset(1,  870,  EventType.TWO_PLUS_ONE, LocalDate.of(2026, 6, 15), LocalDate.of(2026, 6, 30), "Snack Noodle"),
+                3 to TestPreset(1, 1100,  EventType.ONE_PLUS_ONE, null,                       null,                       "Samyang Ramen"),
                 // 음료수 (groupId=2)
-                4 to TestPreset(2, 1100,  EventType.DISCOUNT,     LocalDate.of(2026, 6,  1), LocalDate.of(2026, 6, 20), "Samdasoo 2L"),
-                5 to TestPreset(2, 3200,  EventType.NONE,         null,                       null,                       "Cantata Coffee"),
-                6 to TestPreset(2, 1600,  EventType.ONE_PLUS_ONE, LocalDate.of(2026, 6,  1), LocalDate.of(2026, 6, 15), "Pocari Sweat"),
+                4 to TestPreset(2, 1800,  EventType.DISCOUNT,     LocalDate.of(2026, 6,  1), LocalDate.of(2026, 6, 20), "Coca-Cola"),
+                5 to TestPreset(2, 1700,  EventType.NONE,         null,                       null,                       "Pepsi"),
+                6 to TestPreset(2, 1600,  EventType.ONE_PLUS_ONE, LocalDate.of(2026, 6,  1), LocalDate.of(2026, 6, 15), "Cider"),
                 // 과자 (groupId=3)
-                7 to TestPreset(3, 1500,  EventType.TWO_PLUS_ONE, null,                       null,                       "Shrimp Snack"),
-                8 to TestPreset(3, 2200,  EventType.DISCOUNT,     LocalDate.of(2026, 6, 15), LocalDate.of(2026, 6, 20), "Oreo"),
-                9 to TestPreset(3, 2000,  EventType.NONE,         null,                       null,                       "Binch"),
+                7 to TestPreset(3, 1800,  EventType.TWO_PLUS_ONE, null,                       null,                       "Poca Chip"),
+                8 to TestPreset(3, 1900,  EventType.DISCOUNT,     LocalDate.of(2026, 6, 15), LocalDate.of(2026, 6, 20), "Honey Butter Chip"),
+                9 to TestPreset(3, 2300,  EventType.NONE,         null,                       null,                       "Pringles"),
             )
             else -> emptyMap()
         }
