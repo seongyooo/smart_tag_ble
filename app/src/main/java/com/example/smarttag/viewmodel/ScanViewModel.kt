@@ -58,6 +58,10 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
     private val _currentGroupId = MutableStateFlow<Int?>(null)
     val currentGroupId: StateFlow<Int?> = _currentGroupId.asStateFlow()
 
+    private var zoneCandidate: Int? = null          // 현재 1위 후보
+    private var zoneCandidateSince: Long = 0L       // 후보가 1위가 된 시각 (ms)
+    private val ZONE_DEBOUNCE_MS = 5_000L           // 5초 유지 시 구역 전환
+
     // ── 브로드캐스트 큐 상태 ─────────────────────────────────────
     private val _broadcastQueueState = MutableStateFlow<BroadcastQueueState>(BroadcastQueueState.Idle)
     val broadcastQueueState: StateFlow<BroadcastQueueState> = _broadcastQueueState.asStateFlow()
@@ -75,6 +79,7 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── 브로드캐스트 루프 Job ─────────────────────────────────────
     private var broadcastLoopJob: Job? = null
+    private var scanStartedByBroadcast = false  // 브로드캐스트가 스캔을 켰는지 추적
 
     init {
         observeCategories()
@@ -135,7 +140,8 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
         val scanned = bleManager.discoveredTags.value
         val saved = _savedTags.value.associateBy { it.deviceAddress }
 
-        val merged = scanned.values.map { scannedTag ->
+        // 스캔된 태그: DB 정보로 보강
+        val scannedMerged = scanned.values.map { scannedTag ->
             val savedTag = saved[scannedTag.deviceAddress]
             scannedTag.copy(
                 tagId = savedTag?.tagId?.takeIf { it > 0 } ?: scannedTag.tagId,
@@ -150,13 +156,23 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
                 status = savedTag?.status ?: TagStatus.PENDING,
                 targetName = savedTag?.targetName ?: ""
             )
-        }.sortedByDescending { it.rssi }
+        }
+
+        // DB에 저장됐지만 현재 스캔 결과에 없는 태그도 포함 (rssi = -100으로 표시)
+        val scannedAddresses = scanned.keys
+        val savedOnly = saved.values
+            .filter { it.deviceAddress !in scannedAddresses }
+            .map { it.copy(rssi = -100) }
+
+        val merged = (scannedMerged + savedOnly).sortedWith(
+            compareBy({ if (it.tagId > 0) 0 else 1 }, { it.tagId }, { it.deviceAddress })
+        )
 
         _mergedTags.value = merged
         updateZone()
     }
 
-    // ── RSSI 합산 기반 구역 자동 감지 ────────────────────────────
+    // ── RSSI 합산 기반 구역 자동 감지 (디바운스 5초) ────────────────
 
     private fun updateZone() {
         val visible = _mergedTags.value
@@ -166,8 +182,23 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
             .mapValues { (_, tags) -> tags.sumOf { (it.rssi + 100).coerceAtLeast(0) } }
 
         val detected = score.maxByOrNull { it.value }?.key ?: return
-        if (detected != _currentGroupId.value) {
+
+        // 이미 현재 구역이면 후보 초기화 후 종료
+        if (detected == _currentGroupId.value) {
+            zoneCandidate = null
+            return
+        }
+
+        val now = System.currentTimeMillis()
+
+        if (detected != zoneCandidate) {
+            // 새로운 후보 등장 — 타이머 시작
+            zoneCandidate = detected
+            zoneCandidateSince = now
+        } else if (now - zoneCandidateSince >= ZONE_DEBOUNCE_MS) {
+            // 같은 후보가 5초 이상 1위 유지 → 구역 전환
             _currentGroupId.value = detected
+            zoneCandidate = null
             _snackbarMessage.value = "구역 전환 → ${getCategoryName(detected)}"
         }
     }
@@ -199,7 +230,7 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
                             Log.d(LTAG, "┌─[0x01 수신]─────────────────────────────────────")
                             Log.d(LTAG, "│ addr       = ${event.address}")
                             Log.d(LTAG, "│ rxTagId    = $tagId  →  effectiveTagId = $effectiveTagId")
-                            Log.d(LTAG, "│ rxLastSeq  = $lastSeq")
+                            Log.d(LTAG, "│ rxLastSeq  = $lastSeq")  
                             Log.d(LTAG, "│ dbStatus   = ${existing.status}")
                             Log.d(LTAG, "│ seqMap     = $seqMap")
                             Log.d(LTAG, "│ nameSeq    = $nameSeq")
@@ -368,6 +399,10 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
         maxOf(1, (name.toByteArray(Charsets.UTF_8).size + 17) / 18)
 
     private suspend fun runBroadcastLoop(maxRetries: Int = 15) {
+        // 스캔은 루프 내내 켜둔 채 진행 (scan + advertise 동시 동작)
+        scanStartedByBroadcast = !bleManager.isScanning.value
+        if (scanStartedByBroadcast) bleManager.startScan()
+
         var retries = 0
         while (retries < maxRetries) {
             val pending = dao.getAllPendingTags()
@@ -387,29 +422,22 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
 
             _broadcastQueueState.value = BroadcastQueueState.Running(readyTags.size)
 
-            // ── Step A: 이름 브로드캐스트 (targetName 있는 태그) ─────────
-            // 이름이 아직 미확인인 태그만 대상 (nameSeq에 없으면 아직 전송 안 했거나 ACK 완료)
+            // ── Step A: 이름 브로드캐스트 (스캔 유지한 채 동시 전송) ──────
             val namePendingTags = readyTags.filter { it.targetName.isNotEmpty() }
             for (tag in namePendingTags) {
-                val fragCount = nameFragCount(tag.targetName)
-                val startSeq  = allocSeqs(fragCount)
+                val fragCount   = nameFragCount(tag.targetName)
+                val startSeq    = allocSeqs(fragCount)
                 val lastFragSeq = wrapSeqLocal(startSeq + fragCount - 1)
                 nameSeq[tag.tagId] = lastFragSeq
 
-                bleManager.stopScan()
                 bleManager.broadcastNameUpdate(tag.tagId, tag.targetName, startSeq)
                 Log.d(LTAG, "[name broadcast] tagId=${tag.tagId} name='${tag.targetName}' frags=$fragCount startSeq=$startSeq lastFragSeq=$lastFragSeq")
 
-                // 모든 단편 전송 완료까지 대기 (1s/단편 + 여유 500ms)
-                delay(fragCount * 1000L + 500L)
-
-                // 이름 ACK 수신 스캔 (2s)
-                bleManager.startScan()
-                delay(2000L)
-                bleManager.stopScan()
+                // 단편 전송 완료(1s/단편) + ACK 수신 여유 2s (스캔은 이미 켜져 있음)
+                delay(fragCount * 1000L + 2000L)
             }
 
-            // ── Step B: 가격 브로드캐스트 (0x02) ───────────────────────
+            // ── Step B: 가격 브로드캐스트 (스캔 유지한 채 동시 전송) ──────
             val startIdx = broadcastOffset % readyTags.size
             val entries = (0 until minOf(3, readyTags.size)).map { i ->
                 val tag = readyTags[(startIdx + i) % readyTags.size]
@@ -420,15 +448,10 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
             val seq = allocSeqs(1)
             seqMap[seq] = entries.map { it.tagId }
 
-            bleManager.stopScan()
             bleManager.broadcastPriceUpdate(seq, entries, 5000L)
 
-            // 5s 광고 종료까지 대기 + ESP32가 0x01 갱신할 시간 확보
-            delay(5500L)
-
-            // 스캔 재시작 → 업데이트된 0x01 수신 (가격+이름 ACK 동시 처리)
-            bleManager.startScan()
-            delay(3000L)
+            // 광고 5s + ESP32가 0x01 갱신 후 ACK 수신 여유 2s
+            delay(7000L)
 
             retries++
         }
@@ -537,6 +560,7 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
     // ── 테스트 데이터셋 ───────────────────────────────────────────
 
     private data class TestPreset(
+        val groupId: Int,
         val price: Int,
         val event: EventType,
         val startDate: LocalDate?,
@@ -546,31 +570,38 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * 태그 1~9에 테스트 프리셋 A 또는 B를 일괄 적용 (status → PENDING)
+     * Tag 1~3: 라면(groupId=1), Tag 4~6: 음료수(groupId=2), Tag 7~9: 과자(groupId=3)
      * DB에 없는 tagId는 건너뜀
      */
     fun applyTestDataset(label: String) {
         val presets: Map<Int, TestPreset> = when (label) {
             "A" -> mapOf(
-                1 to TestPreset(1100,  EventType.NONE,         null,                       null,                       "Shin Ramen"),
-                2 to TestPreset(1500,  EventType.ONE_PLUS_ONE, LocalDate.of(2000, 6,  1), LocalDate.of(2000, 6, 30), "Jin Ramen"),
-                3 to TestPreset(2000,  EventType.NONE,         null,                       null,                       "Samdasoo 2L"),
-                4 to TestPreset(980,   EventType.DISCOUNT,     LocalDate.of(2000, 6, 15), LocalDate.of(2000, 6, 20), "Shrimp Snack"),
-                5 to TestPreset(3200,  EventType.TWO_PLUS_ONE, LocalDate.of(2000, 6,  1), LocalDate.of(2000, 6, 15), "Cantata Coffee"),
-                6 to TestPreset(500,   EventType.NONE,         null,                       null,                       "Gum"),
-                7 to TestPreset(1800,  EventType.ONE_PLUS_ONE, null,                       null,                       "Pepero"),
-                8 to TestPreset(4500,  EventType.NONE,         null,                       null,                       "Ottogi Rice"),
-                9 to TestPreset(780,   EventType.DISCOUNT,     LocalDate.of(2000, 6, 10), LocalDate.of(2000, 6, 25), "Pocari Sweat"),
+                // 라면 (groupId=1)
+                1 to TestPreset(1, 1100,  EventType.NONE,         null,                       null,                       "Shin Ramen"),
+                2 to TestPreset(1, 1500,  EventType.ONE_PLUS_ONE, LocalDate.of(2026, 6,  1), LocalDate.of(2026, 6, 30), "Jin Ramen"),
+                3 to TestPreset(1, 1300,  EventType.NONE,         null,                       null,                       "Neoguri"),
+                // 음료수 (groupId=2)
+                4 to TestPreset(2, 1200,  EventType.NONE,         null,                       null,                       "Samdasoo 2L"),
+                5 to TestPreset(2, 3200,  EventType.TWO_PLUS_ONE, LocalDate.of(2026, 6,  1), LocalDate.of(2026, 6, 15), "Cantata Coffee"),
+                6 to TestPreset(2, 1800,  EventType.NONE,         null,                       null,                       "Pocari Sweat"),
+                // 과자 (groupId=3)
+                7 to TestPreset(3, 1500,  EventType.ONE_PLUS_ONE, null,                       null,                       "Shrimp Snack"),
+                8 to TestPreset(3, 2500,  EventType.NONE,         null,                       null,                       "Oreo"),
+                9 to TestPreset(3, 2000,  EventType.DISCOUNT,     LocalDate.of(2026, 6, 10), LocalDate.of(2026, 6, 25), "Binch"),
             )
             "B" -> mapOf(
-                1 to TestPreset(5000,  EventType.DISCOUNT,     LocalDate.of(2000, 6,  1), LocalDate.of(2000, 6, 30), "Beef Bulgogi"),
-                2 to TestPreset(8900,  EventType.NONE,         null,                       null,                       "Jeju Pork"),
-                3 to TestPreset(12000, EventType.ONE_PLUS_ONE, LocalDate.of(2000, 6, 20), LocalDate.of(2000, 6, 30), "Wild Flatfish"),
-                4 to TestPreset(3500,  EventType.TWO_PLUS_ONE, null,                       null,                       "Organic Apple"),
-                5 to TestPreset(15000, EventType.NONE,         null,                       null,                       "Shine Muscat"),
-                6 to TestPreset(2200,  EventType.ONE_PLUS_ONE, LocalDate.of(2000, 6,  1), LocalDate.of(2000, 6, 15), "Premium Milk"),
-                7 to TestPreset(9800,  EventType.DISCOUNT,     LocalDate.of(2000, 6, 15), LocalDate.of(2000, 6, 20), "Imported Cheese"),
-                8 to TestPreset(22000, EventType.NONE,         null,                       null,                       "Sesame Oil Set"),
-                9 to TestPreset(4400,  EventType.TWO_PLUS_ONE, LocalDate.of(2000, 6,  1), LocalDate.of(2000, 6, 30), "Mentaiko"),
+                // 라면 (groupId=1)
+                1 to TestPreset(1, 1000,  EventType.DISCOUNT,     LocalDate.of(2026, 6,  1), LocalDate.of(2026, 6, 30), "Shin Ramen"),
+                2 to TestPreset(1, 1500,  EventType.TWO_PLUS_ONE, LocalDate.of(2026, 6, 15), LocalDate.of(2026, 6, 30), "Jin Ramen"),
+                3 to TestPreset(1, 1300,  EventType.ONE_PLUS_ONE, null,                       null,                       "Neoguri"),
+                // 음료수 (groupId=2)
+                4 to TestPreset(2, 1100,  EventType.DISCOUNT,     LocalDate.of(2026, 6,  1), LocalDate.of(2026, 6, 20), "Samdasoo 2L"),
+                5 to TestPreset(2, 3200,  EventType.NONE,         null,                       null,                       "Cantata Coffee"),
+                6 to TestPreset(2, 1600,  EventType.ONE_PLUS_ONE, LocalDate.of(2026, 6,  1), LocalDate.of(2026, 6, 15), "Pocari Sweat"),
+                // 과자 (groupId=3)
+                7 to TestPreset(3, 1500,  EventType.TWO_PLUS_ONE, null,                       null,                       "Shrimp Snack"),
+                8 to TestPreset(3, 2200,  EventType.DISCOUNT,     LocalDate.of(2026, 6, 15), LocalDate.of(2026, 6, 20), "Oreo"),
+                9 to TestPreset(3, 2000,  EventType.NONE,         null,                       null,                       "Binch"),
             )
             else -> emptyMap()
         }
@@ -578,6 +609,7 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
             var applied = 0
             for ((tagId, preset) in presets) {
                 val tag = dao.getTagById(tagId) ?: continue
+                dao.setGroupId(tag.deviceAddress, preset.groupId)
                 dao.setTargetState(tag.deviceAddress, preset.price, preset.event, preset.startDate, preset.endDate)
                 if (preset.name.isNotEmpty()) {
                     dao.setTargetName(tag.deviceAddress, preset.name)
@@ -592,6 +624,10 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
         broadcastLoopJob?.cancel()
         _broadcastQueueState.value = BroadcastQueueState.Idle
         bleManager.stopBroadcast()
+        if (scanStartedByBroadcast) {
+            bleManager.stopScan()
+            scanStartedByBroadcast = false
+        }
     }
 
     fun upsertTag(tag: SmartTag) {

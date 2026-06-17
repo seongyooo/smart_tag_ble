@@ -4,7 +4,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -96,7 +95,27 @@ fun ScanScreen(
                 )
             )
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) }
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+        floatingActionButton = {
+            val isRunning = queueState is BroadcastQueueState.Running
+            ExtendedFloatingActionButton(
+                onClick = {
+                    if (isRunning) viewModel.stopBroadcast()
+                    else viewModel.startBroadcast()
+                },
+                icon = {
+                    Icon(
+                        if (isRunning) Icons.Default.Stop else Icons.Default.Campaign,
+                        contentDescription = null
+                    )
+                },
+                text = { Text(if (isRunning) "중지" else "브로드캐스트") },
+                containerColor = if (isRunning) MaterialTheme.colorScheme.errorContainer
+                                 else MaterialTheme.colorScheme.primaryContainer,
+                contentColor   = if (isRunning) MaterialTheme.colorScheme.onErrorContainer
+                                 else MaterialTheme.colorScheme.onPrimaryContainer
+            )
+        }
     ) { padding ->
         Column(
             modifier = Modifier
@@ -119,7 +138,6 @@ fun ScanScreen(
                     currentGroupId   = currentGroupId,
                     categories       = categories,
                     tags             = tags,
-                    queueState       = queueState,
                     isScanning       = isScanning,
                     onPriceUpdateClick = onPriceUpdateClick
                 )
@@ -141,232 +159,127 @@ private fun OperationTab(
     currentGroupId: Int?,
     categories: List<CategoryEntity>,
     tags: List<SmartTag>,
-    queueState: BroadcastQueueState,
     isScanning: Boolean,
     onPriceUpdateClick: (Int?) -> Unit
 ) {
-    val zoneTags = if (currentGroupId != null) tags.filter { it.groupId == currentGroupId } else emptyList()
-    val pendingCount = zoneTags.count { it.status == TagStatus.PENDING }
+    val tagsByGroup = tags.groupBy { it.groupId }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 88.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // 현재 구역 카드
-        item {
-            ZoneCard(
-                currentGroupId = currentGroupId,
-                categories     = categories,
-                pendingCount   = pendingCount,
-                isScanning     = isScanning,
-                onUpdateClick  = { onPriceUpdateClick(currentGroupId) }
-            )
-        }
-
-        // 카테고리 빠른 선택
         if (categories.isNotEmpty()) {
             item {
-                Text("카테고리", style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("카테고리", style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (isScanning) {
+                        CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    if (currentGroupId != null) {
+                        val name = categories.firstOrNull { it.groupId == currentGroupId }?.name
+                        if (name != null) {
+                            Spacer(Modifier.weight(1f))
+                            Row(verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Icon(Icons.Default.LocationOn, contentDescription = null,
+                                    modifier = Modifier.size(14.dp),
+                                    tint = MaterialTheme.colorScheme.primary)
+                                Text(name,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+                }
             }
-            item {
-                CategoryChipRow(
-                    categories     = categories,
-                    selectedGroupId = currentGroupId,
-                    tagsByGroup    = tags.groupBy { it.groupId },
-                    onSelect       = { onPriceUpdateClick(it) }
+            items(categories, key = { it.groupId }) { cat ->
+                val groupTags = tagsByGroup[cat.groupId] ?: emptyList()
+                val pending = groupTags.count { it.status == TagStatus.PENDING }
+                val isCurrentZone = cat.groupId == currentGroupId
+                CategoryCard(
+                    category      = cat,
+                    tagCount      = groupTags.size,
+                    pendingCount  = pending,
+                    isCurrentZone = isCurrentZone,
+                    onClick       = { onPriceUpdateClick(cat.groupId) }
                 )
             }
-        }
-
-        // 브로드캐스트 큐 진행
-        if (queueState is BroadcastQueueState.Running) {
-            item {
-                QueueProgressCard(queueState as BroadcastQueueState.Running)
-            }
-        }
-
-        // 현재 구역 태그 상태
-        if (zoneTags.isNotEmpty()) {
-            item {
-                Text(
-                    "현재 구역 태그 (${zoneTags.size}개)",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            items(zoneTags, key = { it.deviceAddress }) { tag ->
-                ZoneTagItem(tag)
-            }
-        } else if (currentGroupId == null && !isScanning) {
-            item {
-                EmptyZoneHint()
-            }
+        } else if (!isScanning) {
+            item { EmptyZoneHint() }
         }
     }
 }
 
 @Composable
-private fun ZoneCard(
-    currentGroupId: Int?,
-    categories: List<CategoryEntity>,
+private fun CategoryCard(
+    category: CategoryEntity,
+    tagCount: Int,
     pendingCount: Int,
-    isScanning: Boolean,
-    onUpdateClick: () -> Unit
+    isCurrentZone: Boolean,
+    onClick: () -> Unit
 ) {
-    val categoryName = categories.firstOrNull { it.groupId == currentGroupId }?.name
-
     Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (currentGroupId != null)
+            containerColor = if (isCurrentZone)
                 MaterialTheme.colorScheme.primaryContainer
             else
-                MaterialTheme.colorScheme.surfaceVariant
-        )
+                MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (isCurrentZone) 3.dp else 1.dp)
     ) {
-        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Icon(Icons.Default.LocationOn,
-                    contentDescription = null,
-                    tint = if (currentGroupId != null)
-                        MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.outline
-                )
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Icon(
+                Icons.Default.LocationOn,
+                contentDescription = null,
+                tint = if (isCurrentZone) MaterialTheme.colorScheme.primary
+                       else MaterialTheme.colorScheme.outline,
+                modifier = Modifier.size(20.dp)
+            )
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    "현재 구역",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    category.name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = if (isCurrentZone) FontWeight.Bold else FontWeight.Normal,
+                    color = if (isCurrentZone) MaterialTheme.colorScheme.onPrimaryContainer
+                            else MaterialTheme.colorScheme.onSurface
                 )
-                if (isScanning) {
-                    Spacer(Modifier.weight(1f))
-                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                if (tagCount > 0) {
+                    Text(
+                        "태그 ${tagCount}개  •  대기 ${pendingCount}개",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (isCurrentZone) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    Text(
+                        "등록된 태그 없음",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline
+                    )
                 }
             }
-
-            if (currentGroupId != null && categoryName != null) {
-                Text(
-                    categoryName,
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    "Group $currentGroupId  •  대기 ${pendingCount}개",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Button(
-                    onClick = onUpdateClick,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Default.Campaign, contentDescription = null,
-                        modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("가격 / 이벤트 업데이트")
-                }
-            } else {
-                Text(
-                    "감지 대기 중",
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = MaterialTheme.colorScheme.outline
-                )
-                Text(
-                    if (isScanning) "가격 태그 RSSI를 분석하고 있습니다…"
-                    else "스캔을 시작하면 구역이 자동으로 감지됩니다.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun CategoryChipRow(
-    categories: List<CategoryEntity>,
-    selectedGroupId: Int?,
-    tagsByGroup: Map<Int, List<SmartTag>>,
-    onSelect: (Int) -> Unit
-) {
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        items(categories) { cat ->
-            val count = tagsByGroup[cat.groupId]?.size ?: 0
-            FilterChip(
-                selected = cat.groupId == selectedGroupId,
-                onClick  = { onSelect(cat.groupId) },
-                label    = { Text("${cat.name}  $count") },
-                leadingIcon = if (cat.groupId == selectedGroupId) {{
-                    Icon(Icons.Default.Check, contentDescription = null,
-                        modifier = Modifier.size(16.dp))
-                }} else null
+            Icon(
+                Icons.AutoMirrored.Filled.ArrowForward,
+                contentDescription = null,
+                tint = if (isCurrentZone) MaterialTheme.colorScheme.primary
+                       else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp)
             )
         }
     }
 }
 
-@Composable
-private fun QueueProgressCard(state: BroadcastQueueState.Running) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
-        shape = RoundedCornerShape(12.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp,
-                color = MaterialTheme.colorScheme.onTertiaryContainer)
-            Column {
-                Text("전체 태그 업데이트 진행 중",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onTertiaryContainer)
-                Text("잔여 ${state.pendingCount}개 태그",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onTertiaryContainer)
-            }
-        }
-    }
-}
 
-@Composable
-private fun ZoneTagItem(tag: SmartTag) {
-    val (statusText, statusColor) = when (tag.status) {
-        TagStatus.UPDATED -> "완료" to Color(0xFF4CAF50)
-        TagStatus.PENDING -> "대기" to Color(0xFFFF9800)
-        TagStatus.FAILED  -> "실패" to Color(0xFFF44336)
-    }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(tag.productName.ifBlank { "TAG-%03d".format(tag.tagId) },
-                style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-            if (tag.currentPrice > 0) {
-                Text("%,d원".format(tag.currentPrice),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(6.dp))
-                .background(statusColor.copy(alpha = 0.15f))
-                .padding(horizontal = 8.dp, vertical = 3.dp)
-        ) {
-            Text(statusText, color = statusColor, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-        }
-    }
-}
 
 @Composable
 private fun EmptyZoneHint() {
@@ -423,7 +336,7 @@ private fun TagSetupTab(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         item {
-            Text("${tags.size}개 태그 발견",
+            Text("${tags.size}개 태그",
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -508,7 +421,9 @@ private fun TagSetupItem(tag: SmartTag, categoryName: String?, onClick: () -> Un
 
 @Composable
 private fun RssiDot(rssi: Int) {
+    val offline = rssi <= -100
     val color = when {
+        offline     -> Color(0xFF9E9E9E)
         rssi >= -60 -> Color(0xFF4CAF50)
         rssi >= -75 -> Color(0xFFFF9800)
         else        -> Color(0xFFF44336)
@@ -520,9 +435,13 @@ private fun RssiDot(rssi: Int) {
             .background(color.copy(alpha = 0.12f)),
         contentAlignment = Alignment.Center
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(rssi.toString(), fontSize = 10.sp, fontWeight = FontWeight.Bold, color = color)
-            Text("dBm", fontSize = 7.sp, color = color)
+        if (offline) {
+            Text("—", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = color)
+        } else {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(rssi.toString(), fontSize = 10.sp, fontWeight = FontWeight.Bold, color = color)
+                Text("dBm", fontSize = 7.sp, color = color)
+            }
         }
     }
 }

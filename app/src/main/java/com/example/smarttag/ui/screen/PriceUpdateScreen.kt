@@ -373,13 +373,6 @@ private fun TagBroadcastItem(tag: SmartTag, categoryName: String) {
                     color = MaterialTheme.colorScheme.error
                 )
             }
-            if (tag.currentPrice > 0) {
-                Text(
-                    "현재: ${"%,d원".format(tag.currentPrice)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
         }
         Box(
             modifier = Modifier
