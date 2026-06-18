@@ -588,17 +588,17 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
             )
             "B" -> mapOf(
                 // 라면 (groupId=1)
-                1 to TestPreset(1, 1350,  EventType.DISCOUNT,     LocalDate.of(2026, 6,  1), LocalDate.of(2026, 6, 30), "Chapagetti"),
-                2 to TestPreset(1,  870,  EventType.TWO_PLUS_ONE, LocalDate.of(2026, 6, 15), LocalDate.of(2026, 6, 30), "Snack Noodle"),
-                3 to TestPreset(1, 1100,  EventType.ONE_PLUS_ONE, null,                       null,                       "Samyang Ramen"),
+                1 to TestPreset(1, 1250,  EventType.DISCOUNT,     LocalDate.of(2026, 6,  1), LocalDate.of(2026, 6, 30), "Shin Ramyun"),
+                2 to TestPreset(1, 1100,  EventType.TWO_PLUS_ONE, LocalDate.of(2026, 6, 15), LocalDate.of(2026, 6, 30), "Snack Myun"),
+                3 to TestPreset(1, 1100,  EventType.ONE_PLUS_ONE, null,                       null,                       "Jin Ramyun"),
                 // 음료수 (groupId=2)
-                4 to TestPreset(2, 1800,  EventType.DISCOUNT,     LocalDate.of(2026, 6,  1), LocalDate.of(2026, 6, 20), "Coca-Cola"),
-                5 to TestPreset(2, 1700,  EventType.NONE,         null,                       null,                       "Pepsi"),
-                6 to TestPreset(2, 1600,  EventType.ONE_PLUS_ONE, LocalDate.of(2026, 6,  1), LocalDate.of(2026, 6, 15), "Cider"),
+                4 to TestPreset(2, 1500,  EventType.DISCOUNT,     LocalDate.of(2026, 6,  1), LocalDate.of(2026, 6, 20), "Milkis"),
+                5 to TestPreset(2, 1700,  EventType.NONE,         null,                       null,                       "Coca-Cola"),
+                6 to TestPreset(2, 1700,  EventType.ONE_PLUS_ONE, LocalDate.of(2026, 6,  1), LocalDate.of(2026, 6, 15), "Chilsung Cider"),
                 // 과자 (groupId=3)
-                7 to TestPreset(3, 1800,  EventType.TWO_PLUS_ONE, null,                       null,                       "Poca Chip"),
-                8 to TestPreset(3, 1900,  EventType.DISCOUNT,     LocalDate.of(2026, 6, 15), LocalDate.of(2026, 6, 20), "Honey Butter Chip"),
-                9 to TestPreset(3, 2300,  EventType.NONE,         null,                       null,                       "Pringles"),
+                7 to TestPreset(3, 2100,  EventType.TWO_PLUS_ONE, null,                       null,                       "Pringles"),
+                8 to TestPreset(3, 1700,  EventType.DISCOUNT,     LocalDate.of(2026, 6, 15), LocalDate.of(2026, 6, 20), "Banana Kick"),
+                9 to TestPreset(3, 1700,  EventType.NONE,         null,                       null,                       "Honey Butter Chip"),
             )
             else -> emptyMap()
         }
